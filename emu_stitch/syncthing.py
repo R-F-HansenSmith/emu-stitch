@@ -4,6 +4,8 @@ reads Syncthing configuration/device IDs, generates .stignore files,
 registers profile folders, handles automated pairing, and queries live device status.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import json
@@ -13,20 +15,24 @@ import urllib.request
 import urllib.error
 import subprocess
 import logging
+from typing import Dict, List, Optional, Tuple
+
+Result = Tuple[bool, str]
 
 TIMEOUT_SECONDS = 5
 
 
-def _syncthing_base_url():
+def _syncthing_base_url() -> str:
     """Base URL for the local Syncthing REST API, overridable via SYNCTHING_URL."""
     return os.environ.get("SYNCTHING_URL", "http://127.0.0.1:8384").rstrip("/")
 
 
-def check_syncthing_installed():
+def check_syncthing_installed() -> bool:
     """Check if syncthing is installed in PATH."""
     return shutil.which("syncthing") is not None
 
-def ensure_syncthing_service(enable=False):
+
+def ensure_syncthing_service(enable: bool = False) -> Result:
     """
     Check systemd syncthing.service status.
     If enable=True, explicitly enables and starts the service.
@@ -36,7 +42,12 @@ def ensure_syncthing_service(enable=False):
 
     if enable:
         try:
-            subprocess.run(["systemctl", "--user", "enable", "--now", "syncthing.service"], capture_output=True, text=True)
+            res = subprocess.run(
+                ["systemctl", "--user", "enable", "--now", "syncthing.service"],
+                capture_output=True, text=True,
+            )
+            if res.returncode != 0:
+                return False, f"systemctl failed (exit {res.returncode}): {res.stderr.strip()}"
             return True, "Syncthing systemd user service enabled and running."
         except Exception as e:
             return False, f"Error enabling syncthing service: {e}"
@@ -47,14 +58,15 @@ def ensure_syncthing_service(enable=False):
         return True, "Syncthing service is running."
     return False, "Syncthing service is currently inactive."
 
-def get_syncthing_credentials():
+
+def get_syncthing_credentials() -> Tuple[Optional[str], Optional[str]]:
     """Extract Syncthing API Key and Device ID from config.xml (checking both XDG State and Config dirs)."""
     candidate_paths = [
         os.path.expanduser("~/.local/state/syncthing/config.xml"),
         os.path.expanduser("~/.config/syncthing/config.xml")
     ]
-    api_key = None
-    device_id = None
+    api_key: Optional[str] = None
+    device_id: Optional[str] = None
 
     for config_xml in candidate_paths:
         if os.path.exists(config_xml):
@@ -64,7 +76,7 @@ def get_syncthing_credentials():
                 api_match = re.search(r'<apikey>([^<]+)</apikey>', content)
                 if api_match:
                     api_key = api_match.group(1).strip()
-                dev_match = re.search(r'<device id="([^"]+)"', content)
+                dev_match = re.search(r'<myID>([^<]+)</myID>', content)
                 if dev_match:
                     device_id = dev_match.group(1).strip()
                 if api_key:
@@ -74,7 +86,8 @@ def get_syncthing_credentials():
 
     return api_key, device_id
 
-def auto_add_syncthing_folder(profile_name, profile_dir):
+
+def auto_add_syncthing_folder(profile_name: str, profile_dir: str) -> Result:
     """
     Automatically add profile_dir as a shared folder in Syncthing via REST API
     if it is not already configured.
@@ -120,8 +133,9 @@ def auto_add_syncthing_folder(profile_name, profile_dir):
             method="PUT"
         )
         with urllib.request.urlopen(post_req, timeout=TIMEOUT_SECONDS) as post_resp:
-            if post_resp.status in (200, 204):
+            if post_resp.status // 100 == 2:
                 return True, f"Successfully auto-registered Syncthing folder for '{profile_name}'"
+            return False, f"Syncthing API returned unexpected status {post_resp.status}"
 
     except (urllib.error.URLError, socket.timeout) as e:
         return False, f"Could not reach Syncthing REST API (timeout or connection error): {e}"
@@ -130,7 +144,8 @@ def auto_add_syncthing_folder(profile_name, profile_dir):
 
     return True, "Syncthing folder configuration verified."
 
-def get_profile_sync_status(profile_dir):
+
+def get_profile_sync_status(profile_dir: str) -> Tuple[str, str]:
     """
     Query Syncthing REST API for live folder sync status matching profile_dir.
     Returns: (status_str, detailed_msg)
@@ -182,7 +197,8 @@ def get_profile_sync_status(profile_dir):
     except Exception as e:
         return "UNKNOWN", f"Error querying folder status: {e}"
 
-def auto_pair_device(remote_device_id):
+
+def auto_pair_device(remote_device_id: str) -> Result:
     """
     Automatically add remote_device_id to Syncthing config and share all
     emu-stitch folders with it via REST API.
@@ -223,8 +239,9 @@ def auto_pair_device(remote_device_id):
             method="PUT"
         )
         with urllib.request.urlopen(post_req, timeout=TIMEOUT_SECONDS) as post_resp:
-            if post_resp.status in (200, 204):
+            if post_resp.status // 100 == 2:
                 return True, f"Successfully paired remote device '{remote_device_id[:7]}...' and shared all save folders!"
+            return False, f"Syncthing API returned unexpected status {post_resp.status}"
 
     except (urllib.error.URLError, socket.timeout) as e:
         return False, f"Could not reach Syncthing REST API (timeout or connection error): {e}"
@@ -233,7 +250,8 @@ def auto_pair_device(remote_device_id):
 
     return True, "Device paired successfully."
 
-def get_paired_devices_status():
+
+def get_paired_devices_status() -> List[Dict[str, object]]:
     """
     Returns list of paired devices with their live connection status.
     Returns: list of dicts [{ 'id': ..., 'name': ..., 'connected': True/False, 'address': ... }]
@@ -251,7 +269,7 @@ def get_paired_devices_status():
         with urllib.request.urlopen(req_cfg, timeout=TIMEOUT_SECONDS) as resp:
             cfg = json.loads(resp.read().decode("utf-8"))
 
-        conns = {}
+        conns: Dict[str, object] = {}
         try:
             req_conns = urllib.request.Request(url_conns, headers=headers)
             with urllib.request.urlopen(req_conns, timeout=TIMEOUT_SECONDS) as resp_c:
@@ -280,7 +298,8 @@ def get_paired_devices_status():
         logging.error(f"Error fetching device status: {e}")
         return []
 
-def generate_stignore(profile_dir):
+
+def generate_stignore(profile_dir: str) -> Result:
     """Generate .stignore file to ignore lock files during active emulation."""
     stignore_path = os.path.join(profile_dir, ".stignore")
     if not os.path.exists(stignore_path):

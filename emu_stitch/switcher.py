@@ -3,18 +3,24 @@ Switcher module for emu-stitch: Generic profile switcher,
 save symlink repointing, and profile folder isolation.
 """
 
+from __future__ import annotations
+
 import os
 import json
 import shutil
 import logging
+import datetime
+from typing import Dict, Optional, Tuple
+
 from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name
 from .emulators import configure_all_emulators
 from .syncthing import generate_stignore
 
-def load_user_map(map_file):
+
+def load_user_map(map_file: str) -> Dict[str, str]:
     """Load or initialize generic user profile map JSON."""
     if not os.path.exists(map_file):
-        initial_map = {}
+        initial_map: Dict[str, str] = {}
         with open(map_file, "w") as f:
             json.dump(initial_map, f, indent=2)
         return initial_map
@@ -25,7 +31,8 @@ def load_user_map(map_file):
         logging.error(f"Error loading map file: {e}")
         return {}
 
-def run_switch(emu_dir=None):
+
+def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
     """Perform atomic save profile switch and emulator symlink update generically."""
     if not emu_dir:
         emu_dir = detect_emulation_dir()
@@ -59,7 +66,9 @@ def run_switch(emu_dir=None):
     os.makedirs(target_profile_dir, exist_ok=True)
     generate_stignore(target_profile_dir)
 
-    # Initial setup migration if saves is still a real directory
+    # Initial setup migration if saves is still a real directory.
+    # Merge contents into the new profile dir (destination wins), then rename
+    # the original to a timestamped backup — never delete it.
     if os.path.exists(active_link) and not os.path.islink(active_link):
         for item in os.listdir(active_link):
             src = os.path.join(active_link, item)
@@ -69,7 +78,8 @@ def run_switch(emu_dir=None):
                     shutil.copytree(src, dst, symlinks=True)
                 else:
                     shutil.copy2(src, dst)
-        shutil.rmtree(active_link)
+        backup_path = active_link + ".bak-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        os.rename(active_link, backup_path)
 
     # Atomic symlink update: build the new symlink at a temp path, then
     # os.replace() it into place. This is atomic on POSIX and avoids any

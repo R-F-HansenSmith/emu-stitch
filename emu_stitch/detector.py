@@ -3,12 +3,16 @@ Detector module for emu-stitch: Dynamically scans common handheld locations
 for the Emulation directory and detects active Steam AccountName/PersonaName.
 """
 
+from __future__ import annotations
+
 import os
 import glob
 import re
 import logging
+from typing import Optional, Tuple
 
-def detect_emulation_dir():
+
+def detect_emulation_dir() -> str:
     """
     Scans common internal and external handheld paths for the Emulation directory.
     Prioritizes internal storage ($HOME/Emulation) before external mounts.
@@ -31,11 +35,12 @@ def detect_emulation_dir():
     for pattern in sd_patterns:
         matches = glob.glob(pattern)
         if matches:
-            return matches[0]
+            return max(matches, key=os.path.getmtime)
 
     return home_emu
 
-def extract_account_name(block):
+
+def extract_account_name(block: str) -> Optional[str]:
     """Extract AccountName (or fallback to PersonaName) from Steam VDF block."""
     match = re.search(r'"AccountName"\s*"([^"]+)"', block)
     if match:
@@ -45,12 +50,14 @@ def extract_account_name(block):
         return match_p.group(1)
     return None
 
-def sanitize_name(name):
+
+def sanitize_name(name: str) -> str:
     """Sanitize account/persona name into a valid, clean folder name."""
     sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
     return sanitized.strip('_') or "Default_User"
 
-def detect_active_steam_user():
+
+def detect_active_steam_user() -> Tuple[Optional[str], Optional[str]]:
     """
     Generic Steam active user detection.
     Reads Steam's loginusers.vdf (sorted by MostRecent and highest Timestamp)
@@ -70,7 +77,7 @@ def detect_active_steam_user():
             for steamid64, block in blocks:
                 steamid3 = str(int(steamid64) - 76561197960265728)
                 account_name = extract_account_name(block)
-                is_recent = 1 if ('"MostRecent"' in block and '"1"' in block) else 0
+                is_recent = 1 if re.search(r'"MostRecent"\s+"1"', block) else 0
                 ts_match = re.search(r'"Timestamp"\s*"(\d+)"', block)
                 timestamp = int(ts_match.group(1)) if ts_match else 0
                 candidates.append((is_recent, timestamp, steamid3, account_name))

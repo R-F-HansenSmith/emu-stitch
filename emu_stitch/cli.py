@@ -5,6 +5,7 @@ state-aware setup wizard, smart emulator auditing, device pairing, and system he
 
 import os
 import sys
+import logging
 import argparse
 from .detector import detect_emulation_dir, detect_active_steam_user
 from .switcher import run_switch
@@ -172,6 +173,8 @@ def cmd_audit(args):
         for g in detected_games:
             print(f"  • {BOLD}{g['name']}{RESET} [{CYAN}{g['emulator']}{RESET}]")
             print(f"    {g['details']}")
+            if "RetroArch" in g["emulator"]:
+                print(f"    {YELLOW}Note: RetroArch saves are detected but not auto-routed. See README for setup.{RESET}")
 
     # Syncthing & Device Audit
     st_ok, st_msg = ensure_syncthing_service(enable=False)
@@ -216,6 +219,8 @@ def main():
     parser_pair.set_defaults(func=cmd_pair)
 
     args = parser.parse_args()
+
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
     if not args.command:
         print_banner()

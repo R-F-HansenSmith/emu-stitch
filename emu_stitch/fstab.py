@@ -3,10 +3,14 @@ fstab module for emu-stitch: Audits mount flags (such as noexec) for external dr
 and secondary mount points (e.g. /mnt, /run/media), skipping standard /home paths.
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
+from typing import Tuple
 
-def audit_mount_permissions(emulation_dir):
+
+def audit_mount_permissions(emulation_dir: str) -> Tuple[bool, str, str]:
     """
     Audit mount flags for external or secondary drive mounts (e.g. /mnt, /run/media).
     Skips auditing standard /home internal storage paths.
@@ -22,7 +26,7 @@ def audit_mount_permissions(emulation_dir):
     try:
         res = subprocess.run(["mount"], capture_output=True, text=True, check=True)
         mounts = res.stdout.splitlines()
-        
+
         matching_mount = None
         for line in mounts:
             parts = line.split()
@@ -31,7 +35,7 @@ def audit_mount_permissions(emulation_dir):
                 if real_path == m_point or real_path.startswith(m_point.rstrip("/") + "/"):
                     if matching_mount is None or len(m_point) > len(matching_mount[0]):
                         matching_mount = (m_point, line)
-        
+
         if matching_mount:
             m_point, m_line = matching_mount
             if "noexec" in m_line:
@@ -44,5 +48,5 @@ def audit_mount_permissions(emulation_dir):
             return False, m_point, f"External mount point '{m_point}' has valid 'exec' permissions."
     except Exception as e:
         return False, emulation_dir, f"External mount check skipped: {e}"
-    
+
     return False, emulation_dir, "Mount permissions verified."

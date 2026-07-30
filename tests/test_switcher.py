@@ -80,3 +80,22 @@ def test_run_switch_leaves_no_leftover_tmp_symlink(tmp_path, fake_steam_user):
     entries = os.listdir(str(emu_dir))
     tmp_leftovers = [e for e in entries if ".tmp-" in e]
     assert tmp_leftovers == []
+
+
+def test_run_switch_migration_leaves_backup_not_deletes(tmp_path, fake_steam_user):
+    """Original saves dir must be renamed to a backup, never deleted."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    saves_dir = emu_dir / "saves"
+    saves_dir.mkdir()
+    (saves_dir / "precious.srm").write_text("very important save")
+
+    run_switch(str(emu_dir))
+
+    # The original 'saves' real directory must no longer exist at the original path
+    assert not saves_dir.exists() or (saves_dir.exists() and saves_dir.is_symlink())
+
+    # A timestamped backup must exist
+    backups = [p for p in emu_dir.iterdir() if p.name.startswith("saves.bak-")]
+    assert len(backups) == 1
+    assert (backups[0] / "precious.srm").read_text() == "very important save"

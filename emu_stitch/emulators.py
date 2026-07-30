@@ -3,18 +3,22 @@ Emulators module for emu-stitch: Manages smart emulator detection,
 conditional save symlinking, anti-loop safeguards, save payload mirroring, and save auditing.
 """
 
+from __future__ import annotations
+
 import os
 import shutil
 import subprocess
 import datetime
+from typing import Dict, List
 
-KNOWN_TITLE_MAP = {
+KNOWN_TITLE_MAP: Dict[str, str] = {
     "00050000/101c9400": "The Legend of Zelda: Breath of the Wild (US)",
     "00050000/101c9500": "The Legend of Zelda: Breath of the Wild (EU)",
     "00050000/101c9300": "The Legend of Zelda: Breath of the Wild (JP)",
 }
 
-def is_flatpak_installed(app_id):
+
+def is_flatpak_installed(app_id: str) -> bool:
     """Check if a Flatpak application is installed."""
     try:
         res = subprocess.run(["flatpak", "info", app_id], capture_output=True, text=True)
@@ -22,12 +26,13 @@ def is_flatpak_installed(app_id):
     except Exception:
         return False
 
-def detect_installed_emulators():
+
+def detect_installed_emulators() -> Dict[str, bool]:
     """
     Detect which emulators are installed on the system via config paths, binaries, or Flatpaks.
     Returns: dict { 'ryujinx': True/False, 'cemu': True/False }
     """
-    results = {}
+    results: Dict[str, bool] = {}
 
     # 1. Ryujinx Check
     ryu_config = os.path.expanduser("~/.config/Ryujinx")
@@ -44,14 +49,15 @@ def detect_installed_emulators():
 
     return results
 
-def _safe_replace_with_symlink(link_path, target_dir):
+
+def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
     """
     Ensure `link_path` is a symlink pointing at `target_dir`, without ever
     deleting real data.
 
     - If `link_path` is already a symlink pointing at `target_dir`: no-op.
-    - If `link_path` is a symlink pointing elsewhere (stale): replace it,
-      creating `target_dir` if needed.
+    - If `link_path` is a symlink pointing elsewhere (stale): replace it
+      atomically, creating `target_dir` if needed.
     - If `link_path` is a real file/directory: merge-copy its contents into
       `target_dir` (existing files at the destination win, source is never
       overwritten), then rename the original to
@@ -65,8 +71,11 @@ def _safe_replace_with_symlink(link_path, target_dir):
         current = os.readlink(link_path)
         if os.path.abspath(current) == real_target:
             return
-        os.unlink(link_path)
-        os.symlink(real_target, link_path)
+        tmp_link = link_path + f".tmp-{os.getpid()}"
+        if os.path.lexists(tmp_link):
+            os.unlink(tmp_link)
+        os.symlink(real_target, tmp_link)
+        os.replace(tmp_link, link_path)
         return
 
     if os.path.isdir(link_path):
@@ -88,7 +97,7 @@ def _safe_replace_with_symlink(link_path, target_dir):
     os.symlink(real_target, link_path)
 
 
-def configure_ryujinx_symlinks(active_link):
+def configure_ryujinx_symlinks(active_link: str) -> None:
     """Ensure Ryujinx bis/user/save and saveMeta symlinks are correctly routed."""
     ryujinx_user = os.path.expanduser("~/.config/Ryujinx/bis/user")
     os.makedirs(ryujinx_user, exist_ok=True)
@@ -99,7 +108,7 @@ def configure_ryujinx_symlinks(active_link):
         _safe_replace_with_symlink(link_path, expected_target)
 
 
-def configure_cemu_symlinks(emu_dir, active_link):
+def configure_cemu_symlinks(emu_dir: str, active_link: str) -> None:
     """Ensure Cemu mlc01/usr/save symlinks are correctly routed."""
     cemu_targets = [
         os.path.expanduser("~/.local/share/Cemu/mlc01/usr/save"),
@@ -110,12 +119,13 @@ def configure_cemu_symlinks(emu_dir, active_link):
         os.makedirs(os.path.dirname(link_path), exist_ok=True)
         _safe_replace_with_symlink(link_path, expected_cemu_target)
 
-def audit_emulator_saves(active_link):
+
+def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
     """
     Scans active save profile directory for detected game save data.
     Returns: list of dicts [{ 'emulator': ..., 'name': ..., 'details': ... }]
     """
-    detected_saves = []
+    detected_saves: List[Dict[str, str]] = []
     if not os.path.exists(active_link):
         return detected_saves
 
@@ -155,6 +165,9 @@ def audit_emulator_saves(active_link):
                     })
 
     # 3. RetroArch / General Save Files (.srm, .sav, .state)
+    # NOTE: RetroArch saves are detected and reported here but are NOT automatically
+    # symlink-routed on profile switch. RetroArch users should manually configure
+    # their saves/states directories to point inside ~/Emulation/saves/<profile>/retroarch/.
     for root, _, files in os.walk(active_link):
         rel = os.path.relpath(root, active_link)
         if rel.startswith("ryujinx") or rel.startswith("Cemu"):
@@ -170,7 +183,8 @@ def audit_emulator_saves(active_link):
 
     return detected_saves
 
-def configure_all_emulators(emu_dir, active_link, profile_name):
+
+def configure_all_emulators(emu_dir: str, active_link: str, profile_name: str) -> None:
     """Run emulator configuration routines ONLY for detected/installed emulators."""
     installed = detect_installed_emulators()
 

@@ -28,7 +28,7 @@ def audit_mount_permissions(emulation_dir):
             parts = line.split()
             if len(parts) >= 3:
                 m_point = parts[2]
-                if real_path.startswith(m_point):
+                if real_path == m_point or real_path.startswith(m_point.rstrip("/") + "/"):
                     if matching_mount is None or len(m_point) > len(matching_mount[0]):
                         matching_mount = (m_point, line)
         

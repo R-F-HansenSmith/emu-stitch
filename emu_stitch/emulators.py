@@ -64,9 +64,11 @@ def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
       `<link_path>.bak-<YYYYMMDD-HHMMSS>` (never delete), then create the
       symlink.
     """
+    if os.path.islink(target_dir):
+        os.unlink(target_dir)
+
+    os.makedirs(target_dir, exist_ok=True)
     real_target = os.path.realpath(os.path.abspath(target_dir))
-    if not os.path.islink(real_target) and not os.path.isdir(real_target):
-        os.makedirs(real_target, exist_ok=True)
 
     if os.path.islink(link_path):
         if os.path.realpath(link_path) == real_target:

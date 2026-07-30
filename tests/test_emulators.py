@@ -90,6 +90,23 @@ def test_safe_replace_does_not_crash_when_target_dir_is_already_a_symlink(tmp_pa
     assert os.path.islink(link_path)
 
 
+def test_safe_replace_cleans_dangling_target_dir_symlink(tmp_path):
+    # Simulates cross-machine synced dangling symlink inside profile (e.g. Cemu/saves -> /mnt/Storage/...)
+    dangling_dest = tmp_path / "non_existent_mnt" / "Storage" / "save"
+    target_dir = tmp_path / "profile" / "Cemu" / "saves"
+    target_dir.parent.mkdir(parents=True)
+    os.symlink(str(dangling_dest), str(target_dir))
+
+    link_path = str(tmp_path / "cemu_save_link")
+
+    _safe_replace_with_symlink(link_path, str(target_dir))
+
+    assert not os.path.islink(str(target_dir))
+    assert os.path.isdir(str(target_dir))
+    assert os.path.islink(link_path)
+    assert os.path.realpath(link_path) == os.path.realpath(str(target_dir))
+
+
 def test_safe_replace_is_noop_when_target_reachable_through_symlink(tmp_path):
     # target_dir contains a symlink in its path (simulates saves -> saves_by_user/alice)
     real_saves = tmp_path / "saves_by_user" / "alice"

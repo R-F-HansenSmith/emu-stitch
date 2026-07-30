@@ -205,10 +205,10 @@ class TestAutoAddSyncthinqFolder:
         assert ok is False
         assert "API Key" in msg
 
-    def test_already_registered_by_path(self, tmp_path, monkeypatch):
+    def test_already_registered_same_path(self, tmp_path, monkeypatch):
         profile_path = str(tmp_path / "saves_by_user" / "alice")
         os.makedirs(profile_path)
-        config_body = json.dumps({"folders": [{"id": "other", "path": profile_path}], "devices": []}).encode()
+        config_body = json.dumps({"folders": [{"id": "emustitch-alice", "path": profile_path}], "devices": []}).encode()
         monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: ("key", "myid"))
 
         mock_resp = _mock_urlopen(config_body)
@@ -217,6 +217,32 @@ class TestAutoAddSyncthinqFolder:
 
         assert ok is True
         assert "already registered" in msg
+
+    def test_updates_existing_folder_path_when_migrated(self, tmp_path, monkeypatch):
+        old_path = str(tmp_path / "home" / "Emulation" / "saves_by_user" / "alice")
+        new_path = str(tmp_path / "mnt" / "Storage" / "Emulation" / "saves_by_user" / "alice")
+        os.makedirs(new_path, exist_ok=True)
+
+        config_body = json.dumps({"folders": [{"id": "emustitch-alice", "path": old_path}], "devices": []}).encode()
+        monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: ("key", "myid"))
+
+        captured_requests = []
+
+        def fake_urlopen(req, timeout=None):
+            captured_requests.append(req)
+            if len(captured_requests) == 1:
+                return _mock_urlopen(config_body)
+            return _mock_urlopen(b"{}", status=200)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            ok, msg = auto_add_syncthing_folder("alice", new_path)
+
+        assert ok is True
+        assert "updated" in msg.lower()
+        # Verify the PUT request payload contained the updated path
+        put_req = captured_requests[1]
+        sent_config = json.loads(put_req.data.decode("utf-8"))
+        assert sent_config["folders"][0]["path"] == os.path.abspath(new_path)
 
     def test_registers_new_folder_on_success(self, tmp_path, monkeypatch):
         profile_path = str(tmp_path / "saves_by_user" / "bob")
@@ -264,11 +290,11 @@ class TestAutoPairDevice:
         config_body = json.dumps({"folders": [], "devices": []}).encode()
         monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: ("key", "myid"))
 
-        call_count = {"n": 0}
+        captured_requests = []
 
         def fake_urlopen(req, timeout=None):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
+            captured_requests.append(req)
+            if len(captured_requests) == 1:
                 return _mock_urlopen(config_body)
             return _mock_urlopen(b"{}", status=200)
 
@@ -277,6 +303,11 @@ class TestAutoPairDevice:
 
         assert ok is True
         assert "paired" in msg.lower()
+        put_req = captured_requests[1]
+        sent_config = json.loads(put_req.data.decode("utf-8"))
+        dev = sent_config["devices"][0]
+        assert dev["deviceID"] == "NEWDEV1-AAAAAA-BBBBBBB"
+        assert dev["autoAcceptFolders"] is True
 
     def test_returns_false_on_api_error(self, monkeypatch):
         import urllib.error

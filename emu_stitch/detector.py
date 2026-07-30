@@ -12,30 +12,57 @@ import logging
 from typing import Optional, Tuple
 
 
+def _has_emulation_signatures(path: str) -> bool:
+    """Check if directory contains active emulation subfolders."""
+    if not os.path.isdir(path):
+        return False
+    signatures = {"saves", "roms", "saves_by_user", "hd_packs", "tools", "bios"}
+    try:
+        subdirs = {d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))}
+        return bool(subdirs.intersection(signatures))
+    except Exception:
+        return False
+
+
 def detect_emulation_dir() -> str:
     """
     Scans common internal and external handheld paths for the Emulation directory.
-    Prioritizes internal storage ($HOME/Emulation) before external mounts.
+    Prioritizes active Emulation directories (containing saves/roms/etc.).
     """
     env_dir = os.environ.get("EMU_DIR") or os.environ.get("EMUDECK_DIR")
     if env_dir and os.path.exists(env_dir):
         return os.path.abspath(env_dir)
 
     home_emu = os.path.expanduser("~/Emulation")
-    if os.path.exists(home_emu):
-        return home_emu
 
     sd_patterns = [
         "/run/media/*/*/Emulation",
         "/run/media/*/Emulation",
+        "/run/media/Emulation",
+        "/mnt/*/*/Emulation",
         "/mnt/*/Emulation",
+        "/mnt/Emulation",
         "/media/*/*/Emulation",
-        "/media/*/Emulation"
+        "/media/*/Emulation",
+        "/media/Emulation"
     ]
+    external_matches = []
     for pattern in sd_patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            return max(matches, key=os.path.getmtime)
+        for m in glob.glob(pattern):
+            if os.path.isdir(m) and m not in external_matches:
+                external_matches.append(m)
+
+    active_external = [m for m in external_matches if _has_emulation_signatures(m)]
+    home_has_signatures = _has_emulation_signatures(home_emu)
+
+    if active_external and not home_has_signatures:
+        return max(active_external, key=os.path.getmtime)
+
+    if os.path.exists(home_emu):
+        return home_emu
+
+    if external_matches:
+        return max(external_matches, key=os.path.getmtime)
 
     return home_emu
 

@@ -67,6 +67,33 @@ def test_detect_emulation_dir_falls_back_to_home_emulation(tmp_path, monkeypatch
     assert result == str(fake_home / "Emulation")
 
 
+def test_detect_emulation_dir_prefers_active_external_mount(tmp_path, monkeypatch):
+    monkeypatch.delenv("EMU_DIR", raising=False)
+    monkeypatch.delenv("EMUDECK_DIR", raising=False)
+    fake_home = tmp_path / "home"
+    empty_home_emu = fake_home / "Emulation"
+    empty_home_emu.mkdir(parents=True)
+
+    fake_mnt_storage = tmp_path / "mnt" / "Storage" / "Emulation"
+    (fake_mnt_storage / "saves").mkdir(parents=True)
+
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+
+    import glob as glob_mod
+    original_glob = glob_mod.glob
+
+    def fake_glob(pattern):
+        if "/mnt/*/*/Emulation" in pattern or "/mnt/*/Emulation" in pattern:
+            return [str(fake_mnt_storage)]
+        return original_glob(pattern)
+
+    monkeypatch.setattr(glob_mod, "glob", fake_glob)
+
+    result = detect_emulation_dir()
+
+    assert result == str(fake_mnt_storage)
+
+
 LOGINUSERS_VDF_TEMPLATE = textwrap.dedent(
     """\
     "users"

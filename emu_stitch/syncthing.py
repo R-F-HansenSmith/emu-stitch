@@ -105,25 +105,32 @@ def auto_add_syncthing_folder(profile_name: str, profile_dir: str) -> Result:
 
         folder_label = f"Emulator Saves - {profile_name}"
         folder_id = f"emustitch-{profile_name.lower()}"
-
-        existing_ids = [f.get("id") for f in config.get("folders", [])]
-        existing_paths = [os.path.abspath(f.get("path", "")) for f in config.get("folders", [])]
         abs_profile_dir = os.path.abspath(profile_dir)
 
-        if folder_id in existing_ids or abs_profile_dir in existing_paths:
-            return True, f"Syncthing folder already registered for '{profile_name}'"
+        existing_folder = None
+        for f in config.get("folders", []):
+            if f.get("id") == folder_id:
+                existing_folder = f
+                break
 
-        new_folder = {
-            "id": folder_id,
-            "label": folder_label,
-            "filesystemType": "basic",
-            "path": abs_profile_dir,
-            "type": "sendreceive",
-            "rescanIntervalS": 3600,
-            "fsWatcherEnabled": True,
-            "fsWatcherDelayS": 10
-        }
-        config["folders"].append(new_folder)
+        if existing_folder:
+            current_path = os.path.abspath(existing_folder.get("path", ""))
+            if current_path == abs_profile_dir:
+                return True, f"Syncthing folder already registered for '{profile_name}'"
+            # Update path if it points elsewhere (e.g. cross-machine path migration)
+            existing_folder["path"] = abs_profile_dir
+        else:
+            new_folder = {
+                "id": folder_id,
+                "label": folder_label,
+                "filesystemType": "basic",
+                "path": abs_profile_dir,
+                "type": "sendreceive",
+                "rescanIntervalS": 3600,
+                "fsWatcherEnabled": True,
+                "fsWatcherDelayS": 10
+            }
+            config.setdefault("folders", []).append(new_folder)
 
         post_data = json.dumps(config).encode("utf-8")
         post_req = urllib.request.Request(
@@ -134,7 +141,12 @@ def auto_add_syncthing_folder(profile_name: str, profile_dir: str) -> Result:
         )
         with urllib.request.urlopen(post_req, timeout=TIMEOUT_SECONDS) as post_resp:
             if post_resp.status // 100 == 2:
-                return True, f"Successfully auto-registered Syncthing folder for '{profile_name}'"
+                msg = (
+                    f"Successfully updated Syncthing folder path for '{profile_name}' to {abs_profile_dir}"
+                    if existing_folder else
+                    f"Successfully auto-registered Syncthing folder for '{profile_name}'"
+                )
+                return True, msg
             return False, f"Syncthing API returned unexpected status {post_resp.status}"
 
     except (urllib.error.URLError, socket.timeout) as e:
@@ -215,14 +227,17 @@ def auto_pair_device(remote_device_id: str) -> Result:
             config = json.loads(resp.read().decode("utf-8"))
 
         devices = config.get("devices", [])
-        existing_dev_ids = [d.get("deviceID") for d in devices]
-        if remote_device_id not in existing_dev_ids:
+        existing_dev = next((d for d in devices if d.get("deviceID") == remote_device_id), None)
+        if not existing_dev:
             devices.append({
                 "deviceID": remote_device_id,
                 "name": f"Device-{remote_device_id[:7]}",
-                "addresses": ["dynamic"]
+                "addresses": ["dynamic"],
+                "autoAcceptFolders": True
             })
             config["devices"] = devices
+        else:
+            existing_dev["autoAcceptFolders"] = True
 
         for folder in config.get("folders", []):
             if folder.get("id", "").startswith("emustitch-"):

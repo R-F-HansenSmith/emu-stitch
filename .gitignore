@@ -8,3 +8,4 @@ user_map.json
 switcher.log
 emu_stitch.log
 docs/superpowers/
+.venv/

@@ -7,14 +7,24 @@ registers profile folders, handles automated pairing, and queries live device st
 import os
 import re
 import json
+import shutil
+import socket
 import urllib.request
+import urllib.error
 import subprocess
 import logging
 
+TIMEOUT_SECONDS = 5
+
+
+def _syncthing_base_url():
+    """Base URL for the local Syncthing REST API, overridable via SYNCTHING_URL."""
+    return os.environ.get("SYNCTHING_URL", "http://127.0.0.1:8384").rstrip("/")
+
+
 def check_syncthing_installed():
     """Check if syncthing is installed in PATH."""
-    res = subprocess.run(["command -v syncthing"], capture_output=True, text=True, shell=True)
-    return res.returncode == 0
+    return shutil.which("syncthing") is not None
 
 def ensure_syncthing_service(enable=False):
     """
@@ -73,11 +83,11 @@ def auto_add_syncthing_folder(profile_name, profile_dir):
     if not api_key:
         return False, "Syncthing API Key not found in config.xml"
 
-    url = "http://127.0.0.1:8384/rest/config"
+    url = f"{_syncthing_base_url()}/rest/config"
     req = urllib.request.Request(url, headers={"X-API-Key": api_key})
 
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             config = json.loads(resp.read().decode("utf-8"))
 
         folder_label = f"Emulator Saves - {profile_name}"
@@ -109,10 +119,12 @@ def auto_add_syncthing_folder(profile_name, profile_dir):
             headers={"X-API-Key": api_key, "Content-Type": "application/json"},
             method="PUT"
         )
-        with urllib.request.urlopen(post_req) as post_resp:
+        with urllib.request.urlopen(post_req, timeout=TIMEOUT_SECONDS) as post_resp:
             if post_resp.status in (200, 204):
                 return True, f"Successfully auto-registered Syncthing folder for '{profile_name}'"
 
+    except (urllib.error.URLError, socket.timeout) as e:
+        return False, f"Could not reach Syncthing REST API (timeout or connection error): {e}"
     except Exception as e:
         return False, f"Syncthing REST API config update note: {e}"
 
@@ -127,13 +139,13 @@ def get_profile_sync_status(profile_dir):
     if not api_key:
         return "UNKNOWN", "Syncthing API Key not found"
 
-    url_cfg = "http://127.0.0.1:8384/rest/config"
+    url_cfg = f"{_syncthing_base_url()}/rest/config"
     headers = {"X-API-Key": api_key}
     abs_profile_dir = os.path.abspath(profile_dir)
 
     try:
         req_cfg = urllib.request.Request(url_cfg, headers=headers)
-        with urllib.request.urlopen(req_cfg) as resp:
+        with urllib.request.urlopen(req_cfg, timeout=TIMEOUT_SECONDS) as resp:
             cfg = json.loads(resp.read().decode("utf-8"))
 
         matching_folder_id = None
@@ -145,9 +157,9 @@ def get_profile_sync_status(profile_dir):
         if not matching_folder_id:
             return "NOT REGISTERED", "Folder not registered in Syncthing yet."
 
-        url_st = f"http://127.0.0.1:8384/rest/db/status?folder={matching_folder_id}"
+        url_st = f"{_syncthing_base_url()}/rest/db/status?folder={matching_folder_id}"
         req_st = urllib.request.Request(url_st, headers=headers)
-        with urllib.request.urlopen(req_st) as resp_st:
+        with urllib.request.urlopen(req_st, timeout=TIMEOUT_SECONDS) as resp_st:
             st = json.loads(resp_st.read().decode("utf-8"))
 
         state = st.get("state", "unknown")
@@ -165,6 +177,8 @@ def get_profile_sync_status(profile_dir):
         else:
             return state.upper(), f"State: {state} ({mb_str})"
 
+    except (urllib.error.URLError, socket.timeout) as e:
+        return "UNKNOWN", f"Could not reach Syncthing REST API (timeout or connection error): {e}"
     except Exception as e:
         return "UNKNOWN", f"Error querying folder status: {e}"
 
@@ -177,11 +191,11 @@ def auto_pair_device(remote_device_id):
     if not api_key:
         return False, "Syncthing API Key not found in config.xml"
 
-    url = "http://127.0.0.1:8384/rest/config"
+    url = f"{_syncthing_base_url()}/rest/config"
     req = urllib.request.Request(url, headers={"X-API-Key": api_key})
 
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
             config = json.loads(resp.read().decode("utf-8"))
 
         devices = config.get("devices", [])
@@ -208,10 +222,12 @@ def auto_pair_device(remote_device_id):
             headers={"X-API-Key": api_key, "Content-Type": "application/json"},
             method="PUT"
         )
-        with urllib.request.urlopen(post_req) as post_resp:
+        with urllib.request.urlopen(post_req, timeout=TIMEOUT_SECONDS) as post_resp:
             if post_resp.status in (200, 204):
                 return True, f"Successfully paired remote device '{remote_device_id[:7]}...' and shared all save folders!"
 
+    except (urllib.error.URLError, socket.timeout) as e:
+        return False, f"Could not reach Syncthing REST API (timeout or connection error): {e}"
     except Exception as e:
         return False, f"Device pairing error: {e}"
 
@@ -226,19 +242,19 @@ def get_paired_devices_status():
     if not api_key:
         return []
 
-    url_cfg = "http://127.0.0.1:8384/rest/config"
-    url_conns = "http://127.0.0.1:8384/rest/system/connections"
+    url_cfg = f"{_syncthing_base_url()}/rest/config"
+    url_conns = f"{_syncthing_base_url()}/rest/system/connections"
     headers = {"X-API-Key": api_key}
 
     try:
         req_cfg = urllib.request.Request(url_cfg, headers=headers)
-        with urllib.request.urlopen(req_cfg) as resp:
+        with urllib.request.urlopen(req_cfg, timeout=TIMEOUT_SECONDS) as resp:
             cfg = json.loads(resp.read().decode("utf-8"))
 
         conns = {}
         try:
             req_conns = urllib.request.Request(url_conns, headers=headers)
-            with urllib.request.urlopen(req_conns) as resp_c:
+            with urllib.request.urlopen(req_conns, timeout=TIMEOUT_SECONDS) as resp_c:
                 conns_data = json.loads(resp_c.read().decode("utf-8"))
                 conns = conns_data.get("connections", {})
         except Exception:

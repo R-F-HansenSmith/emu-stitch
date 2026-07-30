@@ -88,7 +88,7 @@ def cmd_setup(args):
     if os.path.exists(desktop_file):
         print(f"{GREEN}✔ Desktop autostart is already configured.{RESET} ({desktop_file})\n")
     else:
-        if prompt_yes_no("Do you want to enable desktop autostart on system boot?", default=True, auto_yes=auto_yes):
+        if prompt_yes_no("Do you want emu-stitch to run automatically on login to switch save profiles?", default=True, auto_yes=auto_yes):
             os.makedirs(autostart_dir, exist_ok=True)
             with open(desktop_file, "w") as f:
                 f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={wrapper_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")

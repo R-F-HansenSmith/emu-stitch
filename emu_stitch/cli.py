@@ -1,6 +1,6 @@
 """
 CLI entry point for emu-stitch: Command-line interface, terminal visualization,
-state-aware setup wizard (emu-stitch setup), device pairing, and system auditing.
+state-aware setup wizard, smart emulator auditing, device pairing, and system health checks.
 """
 
 import os
@@ -9,7 +9,7 @@ import argparse
 from .detector import detect_emulation_dir, detect_active_steam_user
 from .switcher import run_switch
 from .fstab import audit_mount_permissions
-from .emulators import audit_emulator_saves
+from .emulators import audit_emulator_saves, detect_installed_emulators
 from .syncthing import (
     ensure_syncthing_service,
     get_syncthing_credentials,
@@ -148,12 +148,21 @@ def cmd_audit(args):
     s_id, account_name = detect_active_steam_user()
     print(f"{CYAN}2. Active Steam User Profile:{RESET} {BOLD}{account_name}{RESET} (ID3: {s_id})")
 
+    # Installed Emulators Audit
+    installed_emu = detect_installed_emulators()
+    print(f"\n{CYAN}3. Detected System Emulators:{RESET}")
+    for emu_key, emu_name in [("ryujinx", "Ryujinx (Switch)"), ("cemu", "Cemu (Wii U)")]:
+        if installed_emu.get(emu_key):
+            print(f"  • {BOLD}{emu_name}{RESET} [{GREEN}INSTALLED{RESET}] -> Symlink routing active")
+        else:
+            print(f"  • {BOLD}{emu_name}{RESET} [{YELLOW}NOT INSTALLED{RESET}] -> Symlink routing skipped")
+
     # Audit Game Saves & Sync Status
     real_profile_path = os.readlink(active_link) if os.path.islink(active_link) else active_link
     sync_status, sync_msg = get_profile_sync_status(real_profile_path)
     status_badge = f"{GREEN}{sync_status}{RESET}" if "100%" in sync_status else f"{YELLOW}{sync_status}{RESET}"
     
-    print(f"\n{CYAN}3. Save Games & Profile Sync Status [{status_badge}]:{RESET}")
+    print(f"\n{CYAN}4. Save Games & Profile Sync Status [{status_badge}]:{RESET}")
     print(f"   {sync_msg}")
 
     detected_games = audit_emulator_saves(active_link)
@@ -167,7 +176,7 @@ def cmd_audit(args):
     # Syncthing & Device Audit
     st_ok, st_msg = ensure_syncthing_service(enable=False)
     if st_ok:
-        print(f"\n{CYAN}4. Syncthing & Paired Devices:{RESET}")
+        print(f"\n{CYAN}5. Syncthing & Paired Devices:{RESET}")
         api_key, dev_id = get_syncthing_credentials()
         if dev_id:
             print(f"   This Machine's Device ID:\n   {BOLD}{dev_id}{RESET}")
@@ -182,7 +191,7 @@ def cmd_audit(args):
                 print(f"   • {BOLD}{d['name']}{RESET} [{status_icon}]")
                 print(f"     ID: {d['id'][:14]}... | Address: {d['address']}")
     else:
-        print(f"\n{CYAN}4. Syncthing Status:{RESET} {st_msg}")
+        print(f"\n{CYAN}5. Syncthing Status:{RESET} {st_msg}")
 
 def main():
     parser = argparse.ArgumentParser(

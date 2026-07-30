@@ -1,16 +1,47 @@
 """
-Emulators module for emu-stitch: Manages emulator-specific save symlinks,
-anti-loop safeguards, automated save payload mirroring, and save game auditing.
+Emulators module for emu-stitch: Manages smart emulator detection,
+conditional save symlinking, anti-loop safeguards, save payload mirroring, and save auditing.
 """
 
 import os
 import shutil
+import subprocess
 
 KNOWN_TITLE_MAP = {
     "00050000/101c9400": "The Legend of Zelda: Breath of the Wild (US)",
     "00050000/101c9500": "The Legend of Zelda: Breath of the Wild (EU)",
     "00050000/101c9300": "The Legend of Zelda: Breath of the Wild (JP)",
 }
+
+def is_flatpak_installed(app_id):
+    """Check if a Flatpak application is installed."""
+    try:
+        res = subprocess.run(["flatpak", "info", app_id], capture_output=True, text=True)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+def detect_installed_emulators():
+    """
+    Detect which emulators are installed on the system via config paths, binaries, or Flatpaks.
+    Returns: dict { 'ryujinx': True/False, 'cemu': True/False }
+    """
+    results = {}
+
+    # 1. Ryujinx Check
+    ryu_config = os.path.expanduser("~/.config/Ryujinx")
+    ryu_bin = shutil.which("ryujinx") or shutil.which("Ryujinx")
+    ryu_flatpak = is_flatpak_installed("org.ryujinx.Ryujinx")
+    results["ryujinx"] = os.path.exists(ryu_config) or bool(ryu_bin) or ryu_flatpak
+
+    # 2. Cemu Check
+    cemu_data = os.path.expanduser("~/.local/share/Cemu")
+    cemu_config = os.path.expanduser("~/.config/Cemu")
+    cemu_bin = shutil.which("cemu") or shutil.which("Cemu")
+    cemu_flatpak = is_flatpak_installed("info.cemu.Cemu")
+    results["cemu"] = os.path.exists(cemu_data) or os.path.exists(cemu_config) or bool(cemu_bin) or cemu_flatpak
+
+    return results
 
 def configure_ryujinx_symlinks(active_link):
     """Ensure Ryujinx bis/user/save and saveMeta symlinks are correctly routed."""
@@ -152,7 +183,12 @@ def audit_emulator_saves(active_link):
     return detected_saves
 
 def configure_all_emulators(emu_dir, active_link, profile_name):
-    """Run all emulator configuration routines."""
-    configure_ryujinx_symlinks(active_link)
-    auto_mirror_ryujinx_payloads(active_link)
-    configure_cemu_symlinks(emu_dir, active_link)
+    """Run emulator configuration routines ONLY for detected/installed emulators."""
+    installed = detect_installed_emulators()
+
+    if installed.get("ryujinx"):
+        configure_ryujinx_symlinks(active_link)
+        auto_mirror_ryujinx_payloads(active_link)
+
+    if installed.get("cemu"):
+        configure_cemu_symlinks(emu_dir, active_link)

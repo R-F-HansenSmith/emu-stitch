@@ -315,13 +315,23 @@ def get_paired_devices_status() -> List[Dict[str, object]]:
 
 
 def generate_stignore(profile_dir: str) -> Result:
-    """Generate .stignore file to ignore lock files during active emulation."""
+    """Generate or update .stignore file to ignore lock files with (?d) delete-prefix."""
     stignore_path = os.path.join(profile_dir, ".stignore")
-    if not os.path.exists(stignore_path):
-        try:
-            with open(stignore_path, "w") as f:
-                f.write("*.lock\n")
+    try:
+        if os.path.exists(stignore_path):
+            with open(stignore_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            if "(?d)*.lock" not in content:
+                content = content.replace("*.lock", "(?d)*.lock")
+                if "(?d)*.lock" not in content:
+                    content += "(?d)*.lock\n"
+                with open(stignore_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return True, f"Updated .stignore with (?d) prefix in {profile_dir}"
+            return True, f".stignore already present in {profile_dir}"
+        else:
+            with open(stignore_path, "w", encoding="utf-8") as f:
+                f.write("(?d)*.lock\n")
             return True, f"Generated .stignore in {profile_dir}"
-        except Exception as e:
-            return False, f"Failed to write .stignore: {e}"
-    return True, f".stignore already present in {profile_dir}"
+    except Exception as e:
+        return False, f"Failed to write .stignore: {e}"

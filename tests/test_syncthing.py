@@ -114,19 +114,19 @@ class TestGenerateStignore:
         assert ok is True
         stignore = os.path.join(profile_dir, ".stignore")
         assert os.path.exists(stignore)
-        assert "*.lock" in open(stignore).read()
+        assert "(?d)*.lock" in open(stignore).read()
 
-    def test_noop_when_stignore_already_exists(self, tmp_path):
+    def test_upgrades_existing_stignore_without_d_flag(self, tmp_path):
         profile_dir = str(tmp_path / "alice")
         os.makedirs(profile_dir)
         stignore_path = os.path.join(profile_dir, ".stignore")
         with open(stignore_path, "w") as f:
-            f.write("custom content\n")
+            f.write("*.lock\n")
 
         ok, _ = generate_stignore(profile_dir)
 
         assert ok is True
-        assert open(stignore_path).read() == "custom content\n"
+        assert "(?d)*.lock" in open(stignore_path).read()
 
 
 # ---------------------------------------------------------------------------

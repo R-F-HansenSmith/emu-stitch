@@ -65,7 +65,8 @@ def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
       symlink.
     """
     real_target = os.path.realpath(os.path.abspath(target_dir))
-    os.makedirs(real_target, exist_ok=True)
+    if not os.path.islink(real_target) and not os.path.isdir(real_target):
+        os.makedirs(real_target, exist_ok=True)
 
     if os.path.islink(link_path):
         if os.path.realpath(link_path) == real_target:

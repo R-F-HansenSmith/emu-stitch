@@ -74,6 +74,22 @@ def test_safe_replace_does_not_overwrite_existing_files_at_destination(tmp_path)
     assert (backups[0] / "File1.bin").read_bytes() == b"OLD DATA"
 
 
+def test_safe_replace_does_not_crash_when_target_dir_is_already_a_symlink(tmp_path):
+    # Simulates EmuDeck pre-creating ryujinx/saves as a symlink before emu-stitch runs.
+    real_dir = tmp_path / "real_saves"
+    real_dir.mkdir()
+    target_dir = tmp_path / "ryujinx" / "saves"
+    target_dir.parent.mkdir()
+    os.symlink(str(real_dir), str(target_dir))  # target_dir itself is a symlink
+
+    link_path = str(tmp_path / "bis_user_save")
+
+    # Must not raise FileExistsError
+    _safe_replace_with_symlink(link_path, str(target_dir))
+
+    assert os.path.islink(link_path)
+
+
 def test_safe_replace_is_noop_when_target_reachable_through_symlink(tmp_path):
     # target_dir contains a symlink in its path (simulates saves -> saves_by_user/alice)
     real_saves = tmp_path / "saves_by_user" / "alice"

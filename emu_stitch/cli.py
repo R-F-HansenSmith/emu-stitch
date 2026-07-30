@@ -12,6 +12,7 @@ from .switcher import run_switch
 from .fstab import audit_mount_permissions
 from .emulators import audit_emulator_saves, detect_installed_emulators
 from .syncthing import (
+    check_syncthing_installed,
     ensure_syncthing_service,
     get_syncthing_credentials,
     auto_add_syncthing_folder,
@@ -54,10 +55,10 @@ def prompt_yes_no(question, default=True, auto_yes=False):
 def cmd_setup(args):
     print_banner()
     auto_yes = getattr(args, "yes", False)
-    
+
     print(f"{BOLD}=== Interactive Configuration Wizard ==={RESET}\n")
     print(f"{CYAN}This wizard configures emu-stitch on your machine:{RESET}")
-    print(" 1. Active Save Profile Symlinking & Emulator Payload Mirroring")
+    print(" 1. Active Save Profile Symlinking & Emulator Detection")
     print(" 2. System Boot Autostart (~/.config/autostart/emu_stitch.desktop)")
     print(" 3. Syncthing Background Service (syncthing.service)")
     print(" 4. Syncthing Save Folder REST API Registration\n")
@@ -65,6 +66,19 @@ def cmd_setup(args):
     emu_dir = args.dir or detect_emulation_dir()
     profile, path = run_switch(emu_dir)
     print(f"{GREEN}✔ Active save profile set to:{RESET} {BOLD}{profile}{RESET} ({path})\n")
+
+    # Emulator detection
+    installed_emu = detect_installed_emulators()
+    any_found = any(installed_emu.values())
+    print(f"{CYAN}Detected Emulators:{RESET}")
+    for emu_key, emu_name in [("ryujinx", "Ryujinx (Switch)"), ("cemu", "Cemu (Wii U)")]:
+        if installed_emu.get(emu_key):
+            print(f"  {GREEN}✔ {emu_name}{RESET} — save routing active")
+        else:
+            print(f"  {YELLOW}• {emu_name}{RESET} — not installed, routing skipped")
+    if not any_found:
+        print(f"\n  {YELLOW}⚠ No supported emulators detected. Install Ryujinx or Cemu and re-run setup.{RESET}")
+    print()
 
     # 1. Desktop Autostart State Check & Prompt
     autostart_dir = os.path.expanduser("~/.config/autostart")
@@ -83,32 +97,36 @@ def cmd_setup(args):
             print(f"  {YELLOW}• Desktop autostart skipped.{RESET}\n")
 
     # 2. Syncthing Background Service State Check & Prompt
-    st_active, st_msg = ensure_syncthing_service(enable=False)
-    if st_active:
-        print(f"{GREEN}✔ Syncthing background service is already active and running.{RESET}\n")
+    if not check_syncthing_installed():
+        print(f"{YELLOW}⚠ Syncthing not found in PATH — cross-machine save sync unavailable.{RESET}")
+        print(f"  Install Syncthing and re-run {CYAN}emu-stitch setup{RESET} to configure sync.\n")
     else:
-        if prompt_yes_no("Do you want to enable and start the Syncthing user background service?", default=True, auto_yes=auto_yes):
-            ok, msg = ensure_syncthing_service(enable=True)
-            if ok:
-                print(f"  {GREEN}✔ Syncthing Service:{RESET} {msg}\n")
-            else:
-                print(f"  {YELLOW}⚠ Syncthing Service Note:{RESET} {msg}\n")
+        st_active, st_msg = ensure_syncthing_service(enable=False)
+        if st_active:
+            print(f"{GREEN}✔ Syncthing background service is already active and running.{RESET}\n")
         else:
-            print(f"  {YELLOW}• Syncthing background service activation skipped.{RESET}\n")
+            if prompt_yes_no("Do you want to enable and start the Syncthing user background service?", default=True, auto_yes=auto_yes):
+                ok, msg = ensure_syncthing_service(enable=True)
+                if ok:
+                    print(f"  {GREEN}✔ Syncthing Service:{RESET} {msg}\n")
+                else:
+                    print(f"  {YELLOW}⚠ Syncthing Service Note:{RESET} {msg}\n")
+            else:
+                print(f"  {YELLOW}• Syncthing background service activation skipped.{RESET}\n")
 
-    # 3. Syncthing Folder Registration State Check & Prompt
-    sync_status, _ = get_profile_sync_status(path)
-    if sync_status not in ("NOT REGISTERED", "UNKNOWN"):
-        print(f"{GREEN}✔ Save folder for '{profile}' is already registered in Syncthing.{RESET}\n")
-    else:
-        if prompt_yes_no(f"Do you want to auto-register save folder for '{profile}' in Syncthing?", default=True, auto_yes=auto_yes):
-            st_ok, st_msg = auto_add_syncthing_folder(profile, path)
-            if st_ok:
-                print(f"  {GREEN}✔ Syncthing Folder Registration:{RESET} {st_msg}\n")
-            else:
-                print(f"  {YELLOW}⚠ Syncthing Folder Registration Note:{RESET} {st_msg}\n")
+        # 3. Syncthing Folder Registration State Check & Prompt
+        sync_status, _ = get_profile_sync_status(path)
+        if sync_status not in ("NOT REGISTERED", "UNKNOWN"):
+            print(f"{GREEN}✔ Save folder for '{profile}' is already registered in Syncthing.{RESET}\n")
         else:
-            print(f"  {YELLOW}• Syncthing folder registration skipped.{RESET}\n")
+            if prompt_yes_no(f"Do you want to auto-register save folder for '{profile}' in Syncthing?", default=True, auto_yes=auto_yes):
+                st_ok, st_msg = auto_add_syncthing_folder(profile, path)
+                if st_ok:
+                    print(f"  {GREEN}✔ Syncthing Folder Registration:{RESET} {st_msg}\n")
+                else:
+                    print(f"  {YELLOW}⚠ Syncthing Folder Registration Note:{RESET} {st_msg}\n")
+            else:
+                print(f"  {YELLOW}• Syncthing folder registration skipped.{RESET}\n")
 
     print(f"{GREEN}{BOLD}=== Setup Complete! ==={RESET}")
     print(f"Run {CYAN}emu-stitch audit{RESET} to view your system health and device status.")

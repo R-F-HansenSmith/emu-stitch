@@ -74,6 +74,25 @@ def test_safe_replace_does_not_overwrite_existing_files_at_destination(tmp_path)
     assert (backups[0] / "File1.bin").read_bytes() == b"OLD DATA"
 
 
+def test_safe_replace_is_noop_when_target_reachable_through_symlink(tmp_path):
+    # target_dir contains a symlink in its path (simulates saves -> saves_by_user/alice)
+    real_saves = tmp_path / "saves_by_user" / "alice"
+    real_saves.mkdir(parents=True)
+    saves_link = tmp_path / "saves"
+    os.symlink(str(real_saves), str(saves_link))
+
+    # link_path is inside the saves symlink — this is the exact path passed for Ryujinx
+    link_path = str(saves_link / "ryujinx" / "save")
+    target_dir = str(saves_link / "ryujinx" / "saves")
+
+    # Should not raise FileExistsError
+    _safe_replace_with_symlink(link_path, target_dir)
+
+    assert os.path.islink(link_path)
+    # Calling again must be a no-op (idempotent)
+    _safe_replace_with_symlink(link_path, target_dir)
+
+
 def test_auto_mirror_ryujinx_payloads_removed():
     assert not hasattr(emulators_mod, "auto_mirror_ryujinx_payloads")
 

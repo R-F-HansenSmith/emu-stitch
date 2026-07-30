@@ -8,7 +8,7 @@ import sys
 import logging
 import argparse
 from .detector import detect_emulation_dir, detect_active_steam_user
-from .switcher import run_switch
+from .switcher import run_switch, setup_systemd_watcher
 from .fstab import audit_mount_permissions
 from .emulators import audit_emulator_saves, detect_installed_emulators
 from .syncthing import (
@@ -147,6 +147,10 @@ def cmd_setup(args):
         with open(desktop_file, "w") as f:
             f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={wrapper_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
         print(f"{GREEN}✔ Autostart entry created:{RESET} {desktop_file}\n")
+
+    w_ok, w_msg = setup_systemd_watcher()
+    if w_ok:
+        print(f"{GREEN}✔ Steam User Watcher:{RESET} {w_msg}\n")
 
     if do_syncthing_enable:
         ok, msg = ensure_syncthing_service(enable=True)

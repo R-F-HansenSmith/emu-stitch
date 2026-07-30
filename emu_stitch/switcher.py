@@ -101,3 +101,46 @@ def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
     # Route emulators & mirror save payloads
     configure_all_emulators(emu_dir, active_link, profile_name)
     return profile_name, real_target
+
+
+def setup_systemd_watcher() -> Tuple[bool, str]:
+    """Create and enable a systemd user path unit to watch loginusers.vdf for instant profile switching."""
+    user_systemd_dir = os.path.expanduser("~/.config/systemd/user")
+    os.makedirs(user_systemd_dir, exist_ok=True)
+
+    path_unit = os.path.join(user_systemd_dir, "emu-stitch-watcher.path")
+    service_unit = os.path.join(user_systemd_dir, "emu-stitch-watcher.service")
+    wrapper_bin = os.path.expanduser("~/.local/bin/emu-stitch")
+
+    path_content = (
+        "[Unit]\n"
+        "Description=Watch Steam loginusers.vdf for active user changes\n\n"
+        "[Path]\n"
+        "PathModified=%h/.local/share/Steam/config/loginusers.vdf\n"
+        "Unit=emu-stitch-watcher.service\n\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
+    service_content = (
+        "[Unit]\n"
+        "Description=emu-stitch automatic save profile switcher\n\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f"ExecStart={wrapper_bin} switch\n"
+    )
+
+    try:
+        import subprocess
+        with open(path_unit, "w") as f:
+            f.write(path_content)
+        with open(service_unit, "w") as f:
+            f.write(service_content)
+
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        res = subprocess.run(["systemctl", "--user", "enable", "--now", "emu-stitch-watcher.path"], capture_output=True, text=True)
+        if res.returncode == 0:
+            return True, "systemd loginusers.vdf watcher enabled for automatic profile switching on Steam user change."
+        return False, f"systemctl failed: {res.stderr.strip()}"
+    except Exception as e:
+        return False, f"Error configuring systemd watcher: {e}"

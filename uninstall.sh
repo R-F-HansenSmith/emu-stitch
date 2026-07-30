@@ -25,6 +25,17 @@ if [ -f "$DESKTOP_FILE" ]; then
     echo "  Removed: $DESKTOP_FILE"
 fi
 
+# Stop and remove systemd user watcher units (if created by setup)
+if systemctl --user is-active --quiet emu-stitch-watcher.path 2>/dev/null; then
+    systemctl --user disable --now emu-stitch-watcher.path 2>/dev/null || true
+fi
+for unit_file in "$HOME/.config/systemd/user/emu-stitch-watcher.path" "$HOME/.config/systemd/user/emu-stitch-watcher.service"; do
+    if [ -f "$unit_file" ]; then
+        rm -f "$unit_file"
+        echo "  Removed: $unit_file"
+    fi
+done
+
 # Remove the PATH export line added to shell rc files
 for shell_rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     if [ -f "$shell_rc" ] && grep -qF "$PATH_LINE" "$shell_rc"; then

@@ -99,3 +99,23 @@ def test_run_switch_migration_leaves_backup_not_deletes(tmp_path, fake_steam_use
     backups = [p for p in emu_dir.iterdir() if p.name.startswith("saves.bak-")]
     assert len(backups) == 1
     assert (backups[0] / "precious.srm").read_text() == "very important save"
+
+
+def test_setup_systemd_watcher_creates_unit_files(tmp_path, monkeypatch):
+    import subprocess
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
+
+    from emu_stitch.switcher import setup_systemd_watcher
+    ok, msg = setup_systemd_watcher()
+
+    assert ok is True
+    path_file = fake_home / ".config" / "systemd" / "user" / "emu-stitch-watcher.path"
+    service_file = fake_home / ".config" / "systemd" / "user" / "emu-stitch-watcher.service"
+
+    assert path_file.exists()
+    assert service_file.exists()
+    assert "loginusers.vdf" in path_file.read_text()
+    assert "emu-stitch switch" in service_file.read_text()

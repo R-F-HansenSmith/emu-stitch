@@ -19,7 +19,7 @@ It automatically detects active Steam user accounts, isolates save profiles dyna
 Install using the included installer script:
 
 ```bash
-bash install.sh
+./install.sh
 ```
 
 ---

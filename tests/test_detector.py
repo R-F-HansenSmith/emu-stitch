@@ -65,3 +65,72 @@ def test_detect_emulation_dir_falls_back_to_home_emulation(tmp_path, monkeypatch
     result = detect_emulation_dir()
 
     assert result == str(fake_home / "Emulation")
+
+
+LOGINUSERS_VDF_TEMPLATE = textwrap.dedent(
+    """\
+    "users"
+    {
+        "76561197960287930"
+        {
+            "AccountName"		"olduser"
+            "PersonaName"		"OldUser"
+            "MostRecent"		"0"
+            "Timestamp"		"1600000000"
+        }
+        "76561197960287931"
+        {
+            "AccountName"		"newuser"
+            "PersonaName"		"NewUser"
+            "MostRecent"		"1"
+            "Timestamp"		"1700000000"
+        }
+    }
+    """
+)
+
+
+def _patch_steam_paths(monkeypatch, tmp_path, vdf_content):
+    steam_config_dir = tmp_path / ".local" / "share" / "Steam" / "config"
+    steam_config_dir.mkdir(parents=True)
+    vdf_path = steam_config_dir / "loginusers.vdf"
+    vdf_path.write_text(vdf_content)
+
+    userdata_dir = tmp_path / ".local" / "share" / "Steam" / "userdata"
+    userdata_dir.mkdir(parents=True)
+
+    def fake_expanduser(path):
+        return path.replace("~", str(tmp_path))
+
+    monkeypatch.setattr(os.path, "expanduser", fake_expanduser)
+    return vdf_path, userdata_dir
+
+
+def test_detect_active_steam_user_picks_most_recent_by_flag_and_timestamp(tmp_path, monkeypatch):
+    _patch_steam_paths(monkeypatch, tmp_path, LOGINUSERS_VDF_TEMPLATE)
+
+    steamid3, account_name = detect_active_steam_user()
+
+    # 76561197960287931 - 76561197960265728 = 22203
+    assert steamid3 == "22203"
+    assert account_name == "newuser"
+
+
+def test_detect_active_steam_user_falls_back_to_userdata_mtime(tmp_path, monkeypatch):
+    _patch_steam_paths(monkeypatch, tmp_path, vdf_content="")
+
+    userdata_dir = tmp_path / ".local" / "share" / "Steam" / "userdata"
+    old_dir = userdata_dir / "111"
+    new_dir = userdata_dir / "222"
+    old_dir.mkdir()
+    new_dir.mkdir()
+
+    older_time = 1_000_000_000
+    newer_time = 2_000_000_000
+    os.utime(old_dir, (older_time, older_time))
+    os.utime(new_dir, (newer_time, newer_time))
+
+    steamid3, account_name = detect_active_steam_user()
+
+    assert steamid3 == "222"
+    assert account_name == "User_222"

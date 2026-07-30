@@ -6,6 +6,7 @@ conditional save symlinking, anti-loop safeguards, save payload mirroring, and s
 import os
 import shutil
 import subprocess
+import datetime
 
 KNOWN_TITLE_MAP = {
     "00050000/101c9400": "The Legend of Zelda: Breath of the Wild (US)",
@@ -43,65 +44,60 @@ def detect_installed_emulators():
 
     return results
 
+def _safe_replace_with_symlink(link_path, target_dir):
+    """
+    Ensure `link_path` is a symlink pointing at `target_dir`, without ever
+    deleting real data.
+
+    - If `link_path` is already a symlink pointing at `target_dir`: no-op.
+    - If `link_path` is a symlink pointing elsewhere (stale): replace it,
+      creating `target_dir` if needed.
+    - If `link_path` is a real file/directory: merge-copy its contents into
+      `target_dir` (existing files at the destination win, source is never
+      overwritten), then rename the original to
+      `<link_path>.bak-<YYYYMMDD-HHMMSS>` (never delete), then create the
+      symlink.
+    """
+    os.makedirs(target_dir, exist_ok=True)
+    real_target = os.path.abspath(target_dir)
+
+    if os.path.islink(link_path):
+        current = os.readlink(link_path)
+        if os.path.abspath(current) == real_target:
+            return
+        os.unlink(link_path)
+        os.symlink(real_target, link_path)
+        return
+
+    if os.path.isdir(link_path):
+        for root, dirs, files in os.walk(link_path):
+            rel = os.path.relpath(root, link_path)
+            dest_root = target_dir if rel == "." else os.path.join(target_dir, rel)
+            os.makedirs(dest_root, exist_ok=True)
+            for fname in files:
+                src_f = os.path.join(root, fname)
+                dst_f = os.path.join(dest_root, fname)
+                if not os.path.exists(dst_f):
+                    shutil.copy2(src_f, dst_f)
+        backup_path = f"{link_path}.bak-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        os.rename(link_path, backup_path)
+    elif os.path.isfile(link_path):
+        backup_path = f"{link_path}.bak-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        os.rename(link_path, backup_path)
+
+    os.symlink(real_target, link_path)
+
+
 def configure_ryujinx_symlinks(active_link):
     """Ensure Ryujinx bis/user/save and saveMeta symlinks are correctly routed."""
     ryujinx_user = os.path.expanduser("~/.config/Ryujinx/bis/user")
     os.makedirs(ryujinx_user, exist_ok=True)
-    
+
     for name, subtarget in [("save", "saves"), ("saveMeta", "saveMeta")]:
         link_path = os.path.join(ryujinx_user, name)
         expected_target = os.path.join(active_link, "ryujinx", subtarget)
-        if os.path.islink(link_path):
-            current = os.readlink(link_path)
-            if current != expected_target:
-                os.unlink(link_path)
-                os.symlink(expected_target, link_path)
-        else:
-            if os.path.isdir(link_path) or os.path.isfile(link_path):
-                shutil.rmtree(link_path, ignore_errors=True)
-            os.symlink(expected_target, link_path)
+        _safe_replace_with_symlink(link_path, expected_target)
 
-def auto_mirror_ryujinx_payloads(active_link):
-    """
-    Auto-mirror Ryujinx save payloads (e.g. File1.bin, Common.bin) across
-    all numerical Save ID folders (00000000...) and profile slots (0 and 1).
-    """
-    ryu_saves = os.path.join(active_link, "ryujinx", "saves")
-    ryu_meta = os.path.join(active_link, "ryujinx", "saveMeta")
-    if not os.path.exists(ryu_saves):
-        return
-
-    payload_files = ["Common.bin", "File1.bin"]
-    save_src = None
-    for root, _, files in os.walk(ryu_saves):
-        if "File1.bin" in files:
-            save_src = root
-            break
-
-    if save_src:
-        for item in os.listdir(ryu_saves):
-            item_path = os.path.join(ryu_saves, item)
-            if os.path.isdir(item_path) and item.startswith("00000000"):
-                for slot in ["0", "1"]:
-                    slot_dir = os.path.join(item_path, slot)
-                    os.makedirs(slot_dir, exist_ok=True)
-                    for fname in payload_files:
-                        src_f = os.path.join(save_src, fname)
-                        dst_f = os.path.join(slot_dir, fname)
-                        if os.path.exists(src_f) and os.path.abspath(src_f) != os.path.abspath(dst_f):
-                            shutil.copy2(src_f, dst_f)
-                
-                meta_dir = os.path.join(ryu_meta, item)
-                os.makedirs(meta_dir, exist_ok=True)
-                meta_file = os.path.join(meta_dir, "00000001.meta")
-                if not os.path.exists(meta_file):
-                    existing_meta = None
-                    for m_root, _, m_files in os.walk(ryu_meta):
-                        if "00000001.meta" in m_files:
-                            existing_meta = os.path.join(m_root, "00000001.meta")
-                            break
-                    if existing_meta:
-                        shutil.copy2(existing_meta, meta_file)
 
 def configure_cemu_symlinks(emu_dir, active_link):
     """Ensure Cemu mlc01/usr/save symlinks are correctly routed."""
@@ -112,15 +108,7 @@ def configure_cemu_symlinks(emu_dir, active_link):
     expected_cemu_target = os.path.join(active_link, "Cemu/saves")
     for link_path in cemu_targets:
         os.makedirs(os.path.dirname(link_path), exist_ok=True)
-        if os.path.islink(link_path):
-            current = os.readlink(link_path)
-            if current != expected_cemu_target:
-                os.unlink(link_path)
-                os.symlink(expected_cemu_target, link_path)
-        else:
-            if os.path.isdir(link_path) or os.path.isfile(link_path):
-                shutil.rmtree(link_path, ignore_errors=True)
-            os.symlink(expected_cemu_target, link_path)
+        _safe_replace_with_symlink(link_path, expected_cemu_target)
 
 def audit_emulator_saves(active_link):
     """
@@ -188,7 +176,6 @@ def configure_all_emulators(emu_dir, active_link, profile_name):
 
     if installed.get("ryujinx"):
         configure_ryujinx_symlinks(active_link)
-        auto_mirror_ryujinx_payloads(active_link)
 
     if installed.get("cemu"):
         configure_cemu_symlinks(emu_dir, active_link)

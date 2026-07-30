@@ -1,6 +1,6 @@
 """
 CLI entry point for emu-stitch: Command-line interface, terminal visualization,
-interactive configuration wizard (emu-stitch setup), device pairing, and system auditing.
+state-aware setup wizard (emu-stitch setup), device pairing, and system auditing.
 """
 
 import os
@@ -53,43 +53,61 @@ def prompt_yes_no(question, default=True, auto_yes=False):
 def cmd_setup(args):
     print_banner()
     auto_yes = getattr(args, "yes", False)
+    
     print(f"{BOLD}=== Interactive Configuration Wizard ==={RESET}\n")
+    print(f"{CYAN}This wizard configures emu-stitch on your machine:{RESET}")
+    print(" 1. Active Save Profile Symlinking & Emulator Payload Mirroring")
+    print(" 2. System Boot Autostart (~/.config/autostart/emu_stitch.desktop)")
+    print(" 3. Syncthing Background Service (syncthing.service)")
+    print(" 4. Syncthing Save Folder REST API Registration\n")
 
     emu_dir = args.dir or detect_emulation_dir()
     profile, path = run_switch(emu_dir)
-    print(f"{GREEN}✔ Active save profile:{RESET} {BOLD}{profile}{RESET} ({path})\n")
+    print(f"{GREEN}✔ Active save profile set to:{RESET} {BOLD}{profile}{RESET} ({path})\n")
 
-    # 1. Desktop Autostart Confirmation
-    if prompt_yes_no("Do you want to enable desktop autostart on system boot?", default=True, auto_yes=auto_yes):
-        autostart_dir = os.path.expanduser("~/.config/autostart")
-        os.makedirs(autostart_dir, exist_ok=True)
-        desktop_file = os.path.join(autostart_dir, "emu_stitch.desktop")
-        wrapper_bin = os.path.expanduser("~/.local/bin/emu-stitch")
-        with open(desktop_file, "w") as f:
-            f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={wrapper_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
-        print(f"  {GREEN}✔ Desktop autostart shortcut created:{RESET} {desktop_file}\n")
+    # 1. Desktop Autostart State Check & Prompt
+    autostart_dir = os.path.expanduser("~/.config/autostart")
+    desktop_file = os.path.join(autostart_dir, "emu_stitch.desktop")
+    wrapper_bin = os.path.expanduser("~/.local/bin/emu-stitch")
+
+    if os.path.exists(desktop_file):
+        print(f"{GREEN}✔ Desktop autostart is already configured.{RESET} ({desktop_file})\n")
     else:
-        print(f"  {YELLOW}• Desktop autostart skipped.{RESET}\n")
-
-    # 2. Syncthing Background Service Confirmation
-    if prompt_yes_no("Do you want to enable and start the Syncthing user background service?", default=True, auto_yes=auto_yes):
-        ok, msg = ensure_syncthing_service(enable=True)
-        if ok:
-            print(f"  {GREEN}✔ Syncthing Service:{RESET} {msg}\n")
+        if prompt_yes_no("Do you want to enable desktop autostart on system boot?", default=True, auto_yes=auto_yes):
+            os.makedirs(autostart_dir, exist_ok=True)
+            with open(desktop_file, "w") as f:
+                f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={wrapper_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
+            print(f"  {GREEN}✔ Desktop autostart shortcut created:{RESET} {desktop_file}\n")
         else:
-            print(f"  {YELLOW}⚠ Syncthing Service Note:{RESET} {msg}\n")
-    else:
-        print(f"  {YELLOW}• Syncthing background service activation skipped.{RESET}\n")
+            print(f"  {YELLOW}• Desktop autostart skipped.{RESET}\n")
 
-    # 3. Syncthing Save Folder Registration Confirmation
-    if prompt_yes_no("Do you want to auto-register your save profile folder into Syncthing?", default=True, auto_yes=auto_yes):
-        st_ok, st_msg = auto_add_syncthing_folder(profile, path)
-        if st_ok:
-            print(f"  {GREEN}✔ Syncthing Folder Registration:{RESET} {st_msg}\n")
-        else:
-            print(f"  {YELLOW}⚠ Syncthing Folder Registration Note:{RESET} {st_msg}\n")
+    # 2. Syncthing Background Service State Check & Prompt
+    st_active, st_msg = ensure_syncthing_service(enable=False)
+    if st_active:
+        print(f"{GREEN}✔ Syncthing background service is already active and running.{RESET}\n")
     else:
-        print(f"  {YELLOW}• Syncthing folder registration skipped.{RESET}\n")
+        if prompt_yes_no("Do you want to enable and start the Syncthing user background service?", default=True, auto_yes=auto_yes):
+            ok, msg = ensure_syncthing_service(enable=True)
+            if ok:
+                print(f"  {GREEN}✔ Syncthing Service:{RESET} {msg}\n")
+            else:
+                print(f"  {YELLOW}⚠ Syncthing Service Note:{RESET} {msg}\n")
+        else:
+            print(f"  {YELLOW}• Syncthing background service activation skipped.{RESET}\n")
+
+    # 3. Syncthing Folder Registration State Check & Prompt
+    sync_status, _ = get_profile_sync_status(path)
+    if sync_status not in ("NOT REGISTERED", "UNKNOWN"):
+        print(f"{GREEN}✔ Save folder for '{profile}' is already registered in Syncthing.{RESET}\n")
+    else:
+        if prompt_yes_no(f"Do you want to auto-register save folder for '{profile}' in Syncthing?", default=True, auto_yes=auto_yes):
+            st_ok, st_msg = auto_add_syncthing_folder(profile, path)
+            if st_ok:
+                print(f"  {GREEN}✔ Syncthing Folder Registration:{RESET} {st_msg}\n")
+            else:
+                print(f"  {YELLOW}⚠ Syncthing Folder Registration Note:{RESET} {st_msg}\n")
+        else:
+            print(f"  {YELLOW}• Syncthing folder registration skipped.{RESET}\n")
 
     print(f"{GREEN}{BOLD}=== Setup Complete! ==={RESET}")
     print(f"Run {CYAN}emu-stitch audit{RESET} to view your system health and device status.")

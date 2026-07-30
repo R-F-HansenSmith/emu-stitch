@@ -14,21 +14,27 @@ It automatically detects active Steam user accounts, isolates save profiles dyna
 
 ---
 
-## 🚀 Installation
+## 🚀 Installation & Setup
 
-Install using the included installer script:
-
+### 1. Install CLI Tool
 ```bash
 ./install.sh
 ```
+
+### 2. Run Interactive Configuration Wizard
+```bash
+emu-stitch setup
+```
+*(Optionally run `emu-stitch setup -y` for automated non-interactive setup).*
 
 ---
 
 ## 💻 CLI Usage
 
-Once installed, use `emu-stitch` directly from your terminal:
-
 ```bash
+# Interactive setup wizard (autostart, Syncthing services, folder registration)
+emu-stitch setup
+
 # Audit system environment, game saves, and live sync status
 emu-stitch audit
 
@@ -39,7 +45,7 @@ emu-stitch switch
 emu-stitch pair <REMOTE-DEVICE-ID>
 
 # Specify a custom EmuDeck directory path
-emu-stitch --dir /path/to/Custom/Emulation switch
+emu-stitch --dir /path/to/Custom/Emulation setup
 ```
 
 ---

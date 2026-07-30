@@ -1,7 +1,7 @@
 """
 Syncthing module for emu-stitch: Manages systemd user service status,
 reads Syncthing configuration/device IDs, generates .stignore files,
-registers profile folders, handles automated pairing, and queries live folder sync status.
+registers profile folders, handles automated pairing, and queries live device status.
 """
 
 import os
@@ -11,17 +11,31 @@ import urllib.request
 import subprocess
 import logging
 
-def ensure_syncthing_service():
-    """Ensure syncthing.service user systemd unit is enabled and running."""
-    try:
-        res = subprocess.run(["command -v syncthing"], capture_output=True, text=True, shell=True)
-        if res.returncode != 0:
-            return False, "Syncthing executable not found in PATH. Install syncthing via package manager."
+def check_syncthing_installed():
+    """Check if syncthing is installed in PATH."""
+    res = subprocess.run(["command -v syncthing"], capture_output=True, text=True, shell=True)
+    return res.returncode == 0
 
-        subprocess.run(["systemctl", "--user", "enable", "--now", "syncthing.service"], capture_output=True, text=True)
-        return True, "Syncthing systemd user service enabled and running."
-    except Exception as e:
-        return False, f"Error managing syncthing service: {e}"
+def ensure_syncthing_service(enable=False):
+    """
+    Check systemd syncthing.service status.
+    If enable=True, explicitly enables and starts the service.
+    """
+    if not check_syncthing_installed():
+        return False, "Syncthing executable not found in PATH."
+
+    if enable:
+        try:
+            subprocess.run(["systemctl", "--user", "enable", "--now", "syncthing.service"], capture_output=True, text=True)
+            return True, "Syncthing systemd user service enabled and running."
+        except Exception as e:
+            return False, f"Error enabling syncthing service: {e}"
+
+    # Check active status
+    res = subprocess.run(["systemctl", "--user", "is-active", "syncthing.service"], capture_output=True, text=True)
+    if res.returncode == 0 and "active" in res.stdout:
+        return True, "Syncthing service is running."
+    return False, "Syncthing service is currently inactive."
 
 def get_syncthing_credentials():
     """Extract Syncthing API Key and Device ID from config.xml (checking both XDG State and Config dirs)."""

@@ -1,6 +1,6 @@
 """
 CLI entry point for emu-stitch: Command-line interface, terminal visualization,
-Syncthing auto-setup, 1-command device pairing, and live save game audit.
+interactive configuration wizard (emu-stitch setup), device pairing, and system auditing.
 """
 
 import os
@@ -36,17 +36,69 @@ def print_banner():
     print(f"{CYAN}{BOLD}{art}{RESET}")
     print(f"{YELLOW} Open-Source Multi-User Emulator Save Synchronizer & Profile Switcher{RESET}\n")
 
+def prompt_yes_no(question, default=True, auto_yes=False):
+    """Interactive helper to ask user confirmation."""
+    if auto_yes:
+        return True
+    suffix = " [Y/n]: " if default else " [y/N]: "
+    try:
+        choice = input(f"{BOLD}{question}{RESET}{suffix}").strip().lower()
+        if not choice:
+            return default
+        return choice in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+def cmd_setup(args):
+    print_banner()
+    auto_yes = getattr(args, "yes", False)
+    print(f"{BOLD}=== Interactive Configuration Wizard ==={RESET}\n")
+
+    emu_dir = args.dir or detect_emulation_dir()
+    profile, path = run_switch(emu_dir)
+    print(f"{GREEN}✔ Active save profile:{RESET} {BOLD}{profile}{RESET} ({path})\n")
+
+    # 1. Desktop Autostart Confirmation
+    if prompt_yes_no("Do you want to enable desktop autostart on system boot?", default=True, auto_yes=auto_yes):
+        autostart_dir = os.path.expanduser("~/.config/autostart")
+        os.makedirs(autostart_dir, exist_ok=True)
+        desktop_file = os.path.join(autostart_dir, "emu_stitch.desktop")
+        wrapper_bin = os.path.expanduser("~/.local/bin/emu-stitch")
+        with open(desktop_file, "w") as f:
+            f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={wrapper_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
+        print(f"  {GREEN}✔ Desktop autostart shortcut created:{RESET} {desktop_file}\n")
+    else:
+        print(f"  {YELLOW}• Desktop autostart skipped.{RESET}\n")
+
+    # 2. Syncthing Background Service Confirmation
+    if prompt_yes_no("Do you want to enable and start the Syncthing user background service?", default=True, auto_yes=auto_yes):
+        ok, msg = ensure_syncthing_service(enable=True)
+        if ok:
+            print(f"  {GREEN}✔ Syncthing Service:{RESET} {msg}\n")
+        else:
+            print(f"  {YELLOW}⚠ Syncthing Service Note:{RESET} {msg}\n")
+    else:
+        print(f"  {YELLOW}• Syncthing background service activation skipped.{RESET}\n")
+
+    # 3. Syncthing Save Folder Registration Confirmation
+    if prompt_yes_no("Do you want to auto-register your save profile folder into Syncthing?", default=True, auto_yes=auto_yes):
+        st_ok, st_msg = auto_add_syncthing_folder(profile, path)
+        if st_ok:
+            print(f"  {GREEN}✔ Syncthing Folder Registration:{RESET} {st_msg}\n")
+        else:
+            print(f"  {YELLOW}⚠ Syncthing Folder Registration Note:{RESET} {st_msg}\n")
+    else:
+        print(f"  {YELLOW}• Syncthing folder registration skipped.{RESET}\n")
+
+    print(f"{GREEN}{BOLD}=== Setup Complete! ==={RESET}")
+    print(f"Run {CYAN}emu-stitch audit{RESET} to view your system health and device status.")
+
 def cmd_switch(args):
     emu_dir = args.dir or detect_emulation_dir()
     profile, path = run_switch(emu_dir)
     print(f"\n{GREEN}✔ Active save profile set to:{RESET} {BOLD}{profile}{RESET}")
     print(f"  Target Path: {path}")
-
-    st_ok, st_msg = auto_add_syncthing_folder(profile, path)
-    if st_ok:
-        print(f"{GREEN}✔ Syncthing Auto-Setup:{RESET} {st_msg}")
-    else:
-        print(f"{YELLOW}⚠ Syncthing Auto-Setup Note:{RESET} {st_msg}")
 
 def cmd_pair(args):
     print_banner()
@@ -95,7 +147,7 @@ def cmd_audit(args):
             print(f"    {g['details']}")
 
     # Syncthing & Device Audit
-    st_ok, st_msg = ensure_syncthing_service()
+    st_ok, st_msg = ensure_syncthing_service(enable=False)
     if st_ok:
         print(f"\n{CYAN}4. Syncthing & Paired Devices:{RESET}")
         api_key, dev_id = get_syncthing_credentials()
@@ -112,7 +164,7 @@ def cmd_audit(args):
                 print(f"   • {BOLD}{d['name']}{RESET} [{status_icon}]")
                 print(f"     ID: {d['id'][:14]}... | Address: {d['address']}")
     else:
-        print(f"{YELLOW}⚠ Syncthing Status:{RESET} {st_msg}")
+        print(f"\n{CYAN}4. Syncthing Status:{RESET} {st_msg}")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -122,6 +174,10 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command")
     
+    parser_setup = subparsers.add_parser("setup", help="Interactive configuration wizard for autostart & Syncthing services")
+    parser_setup.add_argument("-y", "--yes", action="store_true", help="Non-interactive setup with default 'Yes' confirmations")
+    parser_setup.set_defaults(func=cmd_setup)
+
     parser_switch = subparsers.add_parser("switch", help="Run active profile switch and emulator link check")
     parser_switch.set_defaults(func=cmd_switch)
 

@@ -71,15 +71,19 @@ def run_switch(emu_dir=None):
                     shutil.copy2(src, dst)
         shutil.rmtree(active_link)
 
-    # Atomic symlink update
+    # Atomic symlink update: build the new symlink at a temp path, then
+    # os.replace() it into place. This is atomic on POSIX and avoids any
+    # window where `active_link` doesn't exist.
     current_target = os.readlink(active_link) if os.path.islink(active_link) else None
     real_target = os.path.abspath(target_profile_dir)
     real_current = os.path.abspath(current_target) if current_target else None
 
     if real_current != real_target:
-        if os.path.lexists(active_link):
-            os.unlink(active_link)
-        os.symlink(real_target, active_link)
+        tmp_link = active_link + f".tmp-{os.getpid()}"
+        if os.path.lexists(tmp_link):
+            os.unlink(tmp_link)
+        os.symlink(real_target, tmp_link)
+        os.replace(tmp_link, active_link)
         print(f"Switched active save profile -> {profile_name} ({real_target})")
     else:
         print(f"Active save profile is already set to -> {profile_name}")

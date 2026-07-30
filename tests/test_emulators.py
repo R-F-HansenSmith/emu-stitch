@@ -6,7 +6,7 @@ import shutil
 import pytest
 
 import emu_stitch.emulators as emulators_mod
-from emu_stitch.emulators import _safe_replace_with_symlink
+from emu_stitch.emulators import _safe_replace_with_symlink, detect_installed_emulators
 
 
 def test_safe_replace_migrates_real_directory_and_creates_backup(tmp_path):
@@ -76,3 +76,36 @@ def test_safe_replace_does_not_overwrite_existing_files_at_destination(tmp_path)
 
 def test_auto_mirror_ryujinx_payloads_removed():
     assert not hasattr(emulators_mod, "auto_mirror_ryujinx_payloads")
+
+
+def test_detect_installed_emulators_all_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(emulators_mod, "is_flatpak_installed", lambda app_id: False)
+
+    result = detect_installed_emulators()
+
+    assert result == {"ryujinx": False, "cemu": False}
+
+
+def test_detect_installed_emulators_ryujinx_present_via_config_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+    (tmp_path / ".config" / "Ryujinx").mkdir(parents=True)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(emulators_mod, "is_flatpak_installed", lambda app_id: False)
+
+    result = detect_installed_emulators()
+
+    assert result["ryujinx"] is True
+    assert result["cemu"] is False
+
+
+def test_detect_installed_emulators_cemu_present_via_binary(tmp_path, monkeypatch):
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/cemu" if name == "cemu" else None)
+    monkeypatch.setattr(emulators_mod, "is_flatpak_installed", lambda app_id: False)
+
+    result = detect_installed_emulators()
+
+    assert result["cemu"] is True
+    assert result["ryujinx"] is False

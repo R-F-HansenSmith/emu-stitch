@@ -12,6 +12,8 @@ import logging
 import datetime
 from typing import Dict, List, Optional, Tuple
 
+from .backups import prune_old_backups
+from .config import get_backup_retention
 from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name
 from .emulators import configure_all_emulators
 from .syncthing import generate_stignore
@@ -86,6 +88,7 @@ def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
                     shutil.copy2(src, dst)
         backup_path = active_link + ".bak-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         os.rename(active_link, backup_path)
+        prune_old_backups(active_link, get_backup_retention())
 
     # Atomic symlink update: build the new symlink at a temp path, then
     # os.replace() it into place. This is atomic on POSIX and avoids any

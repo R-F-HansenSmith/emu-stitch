@@ -103,6 +103,31 @@ def test_run_switch_leaves_no_leftover_tmp_symlink(tmp_path, fake_steam_user):
     assert tmp_leftovers == []
 
 
+def test_run_switch_prunes_old_backups_beyond_configured_retention(tmp_path, fake_steam_user, monkeypatch):
+    import emu_stitch.config as config_mod
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+    config_mod.set_backup_retention(2)
+
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    # Two pre-existing backups from earlier migrations.
+    (emu_dir / "saves.bak-20260101-000000").mkdir()
+    (emu_dir / "saves.bak-20260102-000000").mkdir()
+    saves_dir = emu_dir / "saves"
+    saves_dir.mkdir()
+    (saves_dir / "existing.srm").write_text("data")
+
+    run_switch(str(emu_dir))
+
+    backups = sorted(p.name for p in emu_dir.iterdir() if p.name.startswith("saves.bak-"))
+    assert len(backups) == 2
+    assert "saves.bak-20260101-000000" not in backups
+    assert "saves.bak-20260102-000000" in backups
+
+
 def test_run_switch_migration_leaves_backup_not_deletes(tmp_path, fake_steam_user):
     """Original saves dir must be renamed to a backup, never deleted."""
     emu_dir = tmp_path / "Emulation"

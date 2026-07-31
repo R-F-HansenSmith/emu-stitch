@@ -12,6 +12,9 @@ import subprocess
 import datetime
 from typing import Dict, List, Optional
 
+from .backups import prune_old_backups
+from .config import get_backup_retention
+
 # Wii U title-ID high half for the "Game" category (retail/eShop base games).
 # Other categories under 0005xxxx exist (0005000c DLC, 0005000e Update,
 # 00050010 System Applications like Mii Maker / Health & Safety Info) but
@@ -93,9 +96,11 @@ def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
                     shutil.copy2(src_f, dst_f)
         backup_path = f"{link_path}.bak-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
         os.rename(link_path, backup_path)
+        prune_old_backups(link_path, get_backup_retention())
     elif os.path.isfile(link_path):
         backup_path = f"{link_path}.bak-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
         os.rename(link_path, backup_path)
+        prune_old_backups(link_path, get_backup_retention())
 
     os.symlink(real_target, link_path)
 

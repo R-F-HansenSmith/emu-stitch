@@ -36,6 +36,27 @@ def test_safe_replace_migrates_real_directory_and_creates_backup(tmp_path):
     assert (backups[0] / "File1.bin").read_bytes() == b"precious save data"
 
 
+def test_safe_replace_prunes_old_backups_beyond_configured_retention(tmp_path, monkeypatch):
+    import emu_stitch.config as config_mod
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+    config_mod.set_backup_retention(1)
+
+    link_path = tmp_path / "bis_user_save"
+    (tmp_path / "bis_user_save.bak-20260101-000000").mkdir()
+    link_path.mkdir()
+    (link_path / "File1.bin").write_bytes(b"precious save data")
+
+    target_dir = tmp_path / "profile" / "ryujinx" / "saves"
+    _safe_replace_with_symlink(str(link_path), str(target_dir))
+
+    backups = sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("bis_user_save.bak-"))
+    assert len(backups) == 1
+    assert "bis_user_save.bak-20260101-000000" not in backups
+
+
 def test_safe_replace_is_noop_when_already_correct_symlink(tmp_path):
     target_dir = tmp_path / "profile" / "ryujinx" / "saves"
     target_dir.mkdir(parents=True)

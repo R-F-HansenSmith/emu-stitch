@@ -127,6 +127,49 @@ def test_cli_audit_prints_full_paired_device_id(tmp_path, monkeypatch, capsys):
     assert full_device_id in capsys.readouterr().out
 
 
+def test_cli_audit_lists_all_profiles_with_per_profile_game_counts(tmp_path, monkeypatch, capsys):
+    """The Save Profiles section must list every known profile (not just the
+    active one), marking which is active, with its own game counts —
+    counts must come from that profile's own save data, not the active
+    profile's."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
+    monkeypatch.setattr(cli_mod, "audit_mount_permissions", lambda d: (False, "/home", "ok"))
+    monkeypatch.setattr(cli_mod, "detect_active_steam_user", lambda: ("123", "alice"))
+    monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+    monkeypatch.setattr(cli_mod, "get_profile_sync_status", lambda p: ("UNKNOWN", "n/a"))
+    monkeypatch.setattr(cli_mod, "ensure_syncthing_service", lambda enable=False: (False, "not running"))
+    monkeypatch.setattr(
+        cli_mod, "list_profiles",
+        lambda emu_dir: [
+            {"name": "alice", "path": "/profiles/alice", "active": True},
+            {"name": "bob", "path": "/profiles/bob", "active": False},
+        ],
+    )
+
+    def fake_audit_emulator_saves(path):
+        if path == "/profiles/alice":
+            return [
+                {"emulator": "Ryujinx (Switch)", "name": "5 games tracked", "details": "", "count": 5},
+                {"emulator": "Cemu (Wii U)", "name": "1 game tracked", "details": "", "count": 1},
+            ]
+        return [{"emulator": "Ryujinx (Switch)", "name": "2 games tracked", "details": "", "count": 2}]
+
+    monkeypatch.setattr(cli_mod, "audit_emulator_saves", fake_audit_emulator_saves)
+
+    cli_mod.main()
+
+    out = capsys.readouterr().out
+    assert "Save Profiles (2 known)" in out
+    assert "alice" in out and "(ACTIVE)" in out
+    assert "5 Ryujinx, 1 Cemu" in out
+    assert "bob" in out
+    assert "2 Ryujinx, 0 Cemu" in out
+
+
 class TestPromptYesNo:
     def test_auto_yes_skips_prompt_entirely(self, monkeypatch):
         def fail_input(*a, **k):

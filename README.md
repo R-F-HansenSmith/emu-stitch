@@ -116,16 +116,20 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
 
 2. Active Steam User:        alice (ID3: 123456789)
 
-3. Detected System Emulators:
+3. Save Profiles (2 known):
+   • alice (ACTIVE)          — 3 Ryujinx, 1 Cemu
+   • bob                     — 1 Ryujinx, 0 Cemu
+
+4. Detected System Emulators:
    • Ryujinx (Switch)        [INSTALLED] → Symlink routing active
    • Cemu (Wii U)            [NOT INSTALLED] → Symlink routing skipped
 
-4. Save Games & Profile Sync Status [100% IN SYNC]:
+5. Save Games & Profile Sync Status [100% IN SYNC]:
    All files synced (142.3 MB across 87 files)
-   • Switch Game Save Data   [Ryujinx (Switch)]
-     3 save ID index(es) active
+   • 3 games tracked         [Ryujinx (Switch)]
+     3 unique title(s) across 3 save record(s)
 
-5. Syncthing & Paired Devices:
+6. Syncthing & Paired Devices:
    This Machine's Device ID: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
    Paired Remote Devices (1 paired):
    • deck-living-room        [ONLINE]

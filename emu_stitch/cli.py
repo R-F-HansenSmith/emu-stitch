@@ -9,7 +9,7 @@ import sys
 import logging
 import argparse
 from .detector import detect_emulation_dir, detect_active_steam_user
-from .switcher import run_switch, setup_systemd_watcher
+from .switcher import run_switch, setup_systemd_watcher, list_profiles
 from .fstab import audit_mount_permissions
 from .emulators import audit_emulator_saves, detect_installed_emulators
 from .syncthing import (
@@ -217,9 +217,22 @@ def cmd_audit(args):
     s_id, account_name = detect_active_steam_user()
     print(f"{CYAN}2. Active Steam User Profile:{RESET} {BOLD}{account_name}{RESET} (ID3: {s_id})")
 
+    # Save Profiles Audit
+    profiles = list_profiles(emu_dir)
+    print(f"\n{CYAN}3. Save Profiles ({len(profiles)} known):{RESET}")
+    if not profiles:
+        print(f"  {YELLOW}No save profiles found yet.{RESET} Run 'emu-stitch switch' to create one.")
+    else:
+        for p in profiles:
+            marker = f" {GREEN}(ACTIVE){RESET}" if p["active"] else ""
+            profile_games = audit_emulator_saves(p["path"])
+            ryu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Ryujinx")), 0)
+            cemu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Cemu")), 0)
+            print(f"  • {BOLD}{p['name']}{RESET}{marker} — {ryu_count} Ryujinx, {cemu_count} Cemu")
+
     # Installed Emulators Audit
     installed_emu = detect_installed_emulators()
-    print(f"\n{CYAN}3. Detected System Emulators:{RESET}")
+    print(f"\n{CYAN}4. Detected System Emulators:{RESET}")
     for emu_key, emu_name in [("ryujinx", "Ryujinx (Switch)"), ("cemu", "Cemu (Wii U)")]:
         if installed_emu.get(emu_key):
             print(f"  • {BOLD}{emu_name}{RESET} [{GREEN}INSTALLED{RESET}] -> Symlink routing active")
@@ -231,7 +244,7 @@ def cmd_audit(args):
     sync_status, sync_msg = get_profile_sync_status(real_profile_path)
     status_badge = f"{GREEN}{sync_status}{RESET}" if "100%" in sync_status else f"{YELLOW}{sync_status}{RESET}"
     
-    print(f"\n{CYAN}4. Save Games & Profile Sync Status [{status_badge}]:{RESET}")
+    print(f"\n{CYAN}5. Save Games & Profile Sync Status [{status_badge}]:{RESET}")
     print(f"   {sync_msg}")
 
     detected_games = audit_emulator_saves(active_link)
@@ -247,7 +260,7 @@ def cmd_audit(args):
     # Syncthing & Device Audit
     st_ok, st_msg = ensure_syncthing_service(enable=False)
     if st_ok:
-        print(f"\n{CYAN}5. Syncthing & Paired Devices:{RESET}")
+        print(f"\n{CYAN}6. Syncthing & Paired Devices:{RESET}")
         api_key, dev_id = get_syncthing_credentials()
         if dev_id:
             print(f"   This Machine's Device ID:\n   {BOLD}{dev_id}{RESET}")
@@ -262,7 +275,7 @@ def cmd_audit(args):
                 print(f"   • {BOLD}{d['name']}{RESET} [{status_icon}]")
                 print(f"     ID: {d['id']} | Address: {d['address']}")
     else:
-        print(f"\n{CYAN}5. Syncthing Status:{RESET} {st_msg}")
+        print(f"\n{CYAN}6. Syncthing Status:{RESET} {st_msg}")
 
 def main():
     parser = argparse.ArgumentParser(

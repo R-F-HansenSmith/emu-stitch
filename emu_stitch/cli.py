@@ -19,6 +19,7 @@ from .syncthing import (
     get_syncthing_credentials,
     auto_add_syncthing_folder,
     auto_pair_device,
+    remove_paired_device,
     get_paired_devices_status,
     get_profile_sync_status
 )
@@ -237,6 +238,23 @@ def cmd_pair(args):
     else:
         print(f"{YELLOW}⚠ Device Pairing Error:{RESET} {msg}")
 
+def cmd_unpair(args):
+    print_banner()
+    device_id = args.device_id
+    print(f"{BOLD}Unpairing Remote Device...{RESET}\n")
+    print(f"Target Device ID: {CYAN}{device_id}{RESET}\n")
+
+    if not _is_valid_syncthing_device_id(device_id):
+        print(f"{YELLOW}⚠ Invalid Device ID:{RESET} expected 8 groups of 7 characters separated by hyphens (e.g. XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX).")
+        return
+
+    ok, msg = remove_paired_device(device_id)
+    if ok:
+        print(f"{GREEN}✔ Device Unpaired!{RESET}")
+        print(f"  {msg}")
+    else:
+        print(f"{YELLOW}⚠ Device Unpairing Error:{RESET} {msg}")
+
 def cmd_audit(args):
     emu_dir = args.dir or detect_emulation_dir()
     active_link = os.path.join(emu_dir, "saves")
@@ -335,6 +353,10 @@ def main():
     parser_pair = subparsers.add_parser("pair", help="Pair with a remote machine using its Device ID")
     parser_pair.add_argument("device_id", help="The Syncthing Device ID of the remote machine (8 groups of 7 characters, e.g. XXXXXXX-XXXXXXX-...)")
     parser_pair.set_defaults(func=cmd_pair)
+
+    parser_unpair = subparsers.add_parser("unpair", help="Remove a previously paired remote machine using its Device ID")
+    parser_unpair.add_argument("device_id", help="The Syncthing Device ID of the remote machine (8 groups of 7 characters, e.g. XXXXXXX-XXXXXXX-...)")
+    parser_unpair.set_defaults(func=cmd_unpair)
 
     args = parser.parse_args()
 

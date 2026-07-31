@@ -102,6 +102,42 @@ def test_cli_pair_rejects_malformed_device_id_without_calling_api(monkeypatch, c
     assert "Invalid Device ID" in capsys.readouterr().out
 
 
+def test_cli_unpair_dispatches_device_id_to_remove_paired_device(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "unpair", VALID_DEVICE_ID])
+    calls = []
+    monkeypatch.setattr(
+        cli_mod, "remove_paired_device",
+        lambda device_id: calls.append(device_id) or (True, "unpaired!"),
+    )
+
+    cli_mod.main()
+
+    assert calls == [VALID_DEVICE_ID]
+    assert "unpaired!" in capsys.readouterr().out
+
+
+def test_cli_unpair_reports_failure_without_raising(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "unpair", VALID_DEVICE_ID])
+    monkeypatch.setattr(cli_mod, "remove_paired_device", lambda device_id: (False, "not paired"))
+
+    cli_mod.main()
+
+    assert "not paired" in capsys.readouterr().out
+
+
+def test_cli_unpair_rejects_malformed_device_id_without_calling_api(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "unpair", "not-a-real-device-id"])
+
+    def fail_unpair(*a, **k):
+        raise AssertionError("remove_paired_device should not be called for a malformed device ID")
+
+    monkeypatch.setattr(cli_mod, "remove_paired_device", fail_unpair)
+
+    cli_mod.main()
+
+    assert "Invalid Device ID" in capsys.readouterr().out
+
+
 def test_cli_audit_prints_full_paired_device_id(tmp_path, monkeypatch, capsys):
     """The paired-device ID must be shown in full: it's needed to verify or
     re-pair a device, and a truncated ID is useless for that."""

@@ -272,6 +272,52 @@ def auto_pair_device(remote_device_id: str) -> Result:
     return True, "Device paired successfully."
 
 
+def remove_paired_device(remote_device_id: str) -> Result:
+    """
+    Remove remote_device_id from Syncthing config and unshare it from every
+    emu-stitch folder via REST API.
+    """
+    api_key, _ = get_syncthing_credentials()
+    if not api_key:
+        return False, "Syncthing API Key not found in config.xml"
+
+    url = f"{_syncthing_base_url()}/rest/config"
+    req = urllib.request.Request(url, headers={"X-API-Key": api_key})
+
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+            config = json.loads(resp.read().decode("utf-8"))
+
+        devices = config.get("devices", [])
+        if not any(d.get("deviceID") == remote_device_id for d in devices):
+            return False, f"Device '{remote_device_id[:7]}...' is not paired."
+
+        config["devices"] = [d for d in devices if d.get("deviceID") != remote_device_id]
+
+        for folder in config.get("folders", []):
+            if folder.get("id", "").startswith("emustitch-"):
+                folder["devices"] = [
+                    d for d in folder.get("devices", []) if d.get("deviceID") != remote_device_id
+                ]
+
+        post_data = json.dumps(config).encode("utf-8")
+        post_req = urllib.request.Request(
+            url,
+            data=post_data,
+            headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            method="PUT"
+        )
+        with urllib.request.urlopen(post_req, timeout=TIMEOUT_SECONDS) as post_resp:
+            if post_resp.status // 100 == 2:
+                return True, f"Successfully unpaired device '{remote_device_id[:7]}...' and removed it from all save folders."
+            return False, f"Syncthing API returned unexpected status {post_resp.status}"
+
+    except (urllib.error.URLError, socket.timeout) as e:
+        return False, f"Could not reach Syncthing REST API (timeout or connection error): {e}"
+    except Exception as e:
+        return False, f"Device unpairing error: {e}"
+
+
 def get_paired_devices_status() -> List[Dict[str, object]]:
     """
     Returns list of paired devices with their live connection status.

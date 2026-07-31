@@ -102,6 +102,7 @@ emu-stitch setup -y           # Non-interactive setup (auto-yes to all prompts)
 emu-stitch switch             # Switch to the active Steam user's save profile
 emu-stitch audit              # Show full system health: saves, sync status, devices
 emu-stitch pair <DEVICE-ID>   # Pair with a remote machine for save sync
+emu-stitch unpair <DEVICE-ID> # Remove a previously paired remote machine
 
 emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
 ```

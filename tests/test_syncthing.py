@@ -17,6 +17,7 @@ from emu_stitch.syncthing import (
     get_paired_devices_status,
     get_profile_sync_status,
     get_syncthing_credentials,
+    remove_paired_device,
 )
 
 # ---------------------------------------------------------------------------
@@ -331,6 +332,80 @@ class TestAutoPairDevice:
 
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
             ok, msg = auto_pair_device("SOMEID")
+
+        assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# remove_paired_device
+# ---------------------------------------------------------------------------
+
+class TestRemovePairedDevice:
+    def test_returns_false_when_no_api_key(self, monkeypatch):
+        monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: (None, None))
+
+        ok, msg = remove_paired_device("EXISTING-DEV1234")
+
+        assert ok is False
+
+    def test_returns_false_when_device_not_paired(self, monkeypatch):
+        config_body = json.dumps({"folders": [], "devices": []}).encode()
+        monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: ("key", "myid"))
+
+        with patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: _mock_urlopen(config_body)):
+            ok, msg = remove_paired_device("NEVER-PAIRED-DEVICE")
+
+        assert ok is False
+        assert "not paired" in msg.lower()
+
+    def test_unpairs_existing_device_and_removes_from_all_folders(self, monkeypatch):
+        config_body = json.dumps({
+            "devices": [
+                {"deviceID": "REMOTE1-AAAAAAA", "name": "Remote1", "autoAcceptFolders": True},
+                {"deviceID": "REMOTE2-BBBBBBB", "name": "Remote2"},
+            ],
+            "folders": [
+                {
+                    "id": "emustitch-alice",
+                    "devices": [{"deviceID": "REMOTE1-AAAAAAA"}, {"deviceID": "REMOTE2-BBBBBBB"}],
+                },
+                {
+                    "id": "emustitch-bob",
+                    "devices": [{"deviceID": "REMOTE1-AAAAAAA"}],
+                },
+            ],
+        }).encode()
+        monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: ("key", "myid"))
+
+        captured_requests = []
+
+        def fake_urlopen(req, timeout=None):
+            captured_requests.append(req)
+            if len(captured_requests) == 1:
+                return _mock_urlopen(config_body)
+            return _mock_urlopen(b"{}", status=200)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            ok, msg = remove_paired_device("REMOTE1-AAAAAAA")
+
+        assert ok is True
+        put_req = captured_requests[1]
+        sent_config = json.loads(put_req.data.decode("utf-8"))
+
+        device_ids = [d["deviceID"] for d in sent_config["devices"]]
+        assert "REMOTE1-AAAAAAA" not in device_ids
+        assert "REMOTE2-BBBBBBB" in device_ids
+
+        for folder in sent_config["folders"]:
+            folder_device_ids = [d["deviceID"] for d in folder["devices"]]
+            assert "REMOTE1-AAAAAAA" not in folder_device_ids
+
+    def test_returns_false_on_api_error(self, monkeypatch):
+        import urllib.error
+        monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: ("key", "myid"))
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+            ok, msg = remove_paired_device("SOMEID")
 
         assert ok is False
 

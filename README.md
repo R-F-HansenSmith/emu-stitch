@@ -19,7 +19,7 @@ It also keeps saves synced across multiple machines via [Syncthing](https://sync
 **Key guarantees:**
 - Active save data is never deleted. Real directories are renamed to a timestamped backup before being replaced with symlinks. Old backups are pruned on a rolling basis (configurable, default: keep the last 3; set to 0 to keep every backup forever).
 - Profile switches are atomic. There is no window where a save directory doesn't exist.
-- Zero runtime dependencies. Pure Python stdlib — works on any Linux image without `pip install`.
+- Installed and run via [uv](https://docs.astral.sh/uv/) — dependencies are isolated in their own environment, no manual `pip install` or virtualenv management needed.
 
 ---
 
@@ -49,7 +49,7 @@ Once configured, emu-stitch's profile switch covers RetroArch automatically beca
 ## Requirements
 
 - Linux (Steam Deck / SteamOS, Arch, Bazzite, CachyOS, ChimeraOS, or any distro)
-- Python 3.8+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (manages the Python environment and dependencies)
 - Steam installed (for user detection)
 - [Syncthing](https://syncthing.net/) installed (optional — only needed for cross-machine sync)
 
@@ -63,7 +63,7 @@ cd emu-stitch
 ./install.sh
 ```
 
-This places the `emu-stitch` binary in `~/.local/bin/` and the package in `~/.local/share/emu-stitch/`.
+This installs `emu-stitch` as an isolated [uv tool](https://docs.astral.sh/uv/guides/tools/), with a `emu-stitch` shim placed on your `PATH` (typically `~/.local/bin/`).
 
 To uninstall:
 
@@ -112,29 +112,40 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
 ```
   _____ emu-stitch ______
 
-1. EmuDeck Directory:        /home/user/Emulation
-   Mount Audit:              Internal Storage (/home) — exec permissions active
+1. EmuDeck Directory ───────────────────────────
+   /home/user/Emulation
+   ✔ Internal Storage (/home) - exec permissions active
 
-2. Active Steam User:        alice (ID3: 123456789)
+2. Active Steam User Profile ───────────────────
+   alice  (ID3: 123456789)
 
-3. Save Profiles (2 known):
-   • alice (ACTIVE) [ID3: 123456789] — 3 Ryujinx, 1 Cemu
-   • bob [ID3: 987654321]            — 1 Ryujinx, 0 Cemu
+3. Save Profiles (2 known) ─────────────────────
+   ╭───────┬───────────┬────────┬─────────┬──────╮
+   │ NAME  │ STEAM ID3 │ ACTIVE │ RYUJINX │ CEMU │
+   ├───────┼───────────┼────────┼─────────┼──────┤
+   │ alice │ 123456789 │   ●    │       3 │    1 │
+   │ bob   │ 987654321 │        │       1 │    0 │
+   ╰───────┴───────────┴────────┴─────────┴──────╯
 
-4. Detected System Emulators:
-   • Ryujinx (Switch)        [INSTALLED] → Symlink routing active
-   • Cemu (Wii U)            [NOT INSTALLED] → Symlink routing skipped
+4. Detected System Emulators ───────────────────
+   • Ryujinx (Switch) INSTALLED -> Symlink routing active
+   • Cemu (Wii U) NOT INSTALLED -> Symlink routing skipped
 
-5. Save Games & Profile Sync Status [100% IN SYNC]:
-   All files synced (142.3 MB across 87 files)
-   • 3 games tracked         [Ryujinx (Switch)]
+5. Save Games & Profile Sync Status ────────────
+   100% IN SYNC — All files synced (142.3 MB across 87 files)
+   • 3 games tracked Ryujinx (Switch)
      3 unique title(s) across 3 save record(s)
 
-6. Syncthing & Paired Devices:
-   This Machine's Device ID: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
+6. Syncthing & Paired Devices ──────────────────
+   Device ID: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
+
    Paired Remote Devices (1 paired):
-   • deck-living-room        [ONLINE]
-     ID: YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY  |  Address: 192.168.1.42:22000
+   ╭──────────────────┬────────┬─────────────────────╮
+   │ NAME             │ STATUS │ ADDRESS             │
+   ├──────────────────┼────────┼─────────────────────┤
+   │ deck-living-room │ ONLINE │ 192.168.1.42:22000  │
+   ╰──────────────────┴────────┴─────────────────────╯
+     ID: YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY
 ```
 
 ---

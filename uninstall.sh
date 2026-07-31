@@ -3,20 +3,29 @@ set -e
 
 echo "=== Uninstalling emu-stitch CLI ==="
 
-BIN_DIR="$HOME/.local/bin"
-PKG_DIR="$HOME/.local/share/emu-stitch"
 DESKTOP_FILE="$HOME/.config/autostart/emu_stitch.desktop"
-PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 
-# Remove installed package and binary
-if [ -d "$PKG_DIR" ]; then
-    rm -rf "$PKG_DIR"
-    echo "  Removed: $PKG_DIR"
+# Remove the uv-managed tool install (isolated venv + shim)
+if command -v uv >/dev/null 2>&1; then
+    if uv tool list 2>/dev/null | grep -q '^emu-stitch '; then
+        uv tool uninstall emu-stitch
+        echo "  Uninstalled emu-stitch uv tool"
+    fi
+else
+    echo "  Warning: uv not found in PATH; skipping 'uv tool uninstall emu-stitch'." >&2
 fi
 
-if [ -f "$BIN_DIR/emu-stitch" ]; then
-    rm -f "$BIN_DIR/emu-stitch"
-    echo "  Removed: $BIN_DIR/emu-stitch"
+# Clean up leftovers from the pre-uv install method (a copied package
+# directory and a plain wrapper script, rather than a uv-managed symlink).
+LEGACY_BIN="$HOME/.local/bin/emu-stitch"
+LEGACY_PKG_DIR="$HOME/.local/share/emu-stitch"
+if [ -d "$LEGACY_PKG_DIR" ]; then
+    rm -rf "$LEGACY_PKG_DIR"
+    echo "  Removed: $LEGACY_PKG_DIR"
+fi
+if [ -f "$LEGACY_BIN" ] && [ ! -L "$LEGACY_BIN" ]; then
+    rm -f "$LEGACY_BIN"
+    echo "  Removed: $LEGACY_BIN"
 fi
 
 # Remove desktop autostart entry (if created by setup)
@@ -35,15 +44,7 @@ for unit_file in "$HOME/.config/systemd/user/emu-stitch-watcher.path" "$HOME/.co
         echo "  Removed: $unit_file"
     fi
 done
-
-# Remove the PATH export line added to shell rc files
-for shell_rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [ -f "$shell_rc" ] && grep -qF "$PATH_LINE" "$shell_rc"; then
-        # Use a temp file to avoid in-place edit issues on all platforms
-        grep -vF "$PATH_LINE" "$shell_rc" > "$shell_rc.tmp" && mv "$shell_rc.tmp" "$shell_rc"
-        echo "  Removed PATH entry from: $shell_rc"
-    fi
-done
+systemctl --user daemon-reload 2>/dev/null || true
 
 echo ""
 echo "=== emu-stitch uninstalled successfully ==="

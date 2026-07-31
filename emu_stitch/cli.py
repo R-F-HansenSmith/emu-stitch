@@ -4,6 +4,7 @@ state-aware setup wizard, smart emulator auditing, device pairing, and system he
 """
 
 import os
+import re
 import sys
 import logging
 import argparse
@@ -26,6 +27,13 @@ YELLOW = "\033[93m"
 CYAN = "\033[96m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
+
+# A Syncthing Device ID is 8 groups of 7 base32 characters (A-Z, 2-7), joined by hyphens.
+_DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(-[A-Z2-7]{7}){7}$")
+
+
+def _is_valid_syncthing_device_id(device_id: str) -> bool:
+    return bool(_DEVICE_ID_RE.match(device_id.upper()))
 
 def print_banner():
     art = r"""
@@ -181,6 +189,10 @@ def cmd_pair(args):
     print(f"{BOLD}Pairing Remote Device...{RESET}\n")
     print(f"Target Device ID: {CYAN}{device_id}{RESET}\n")
 
+    if not _is_valid_syncthing_device_id(device_id):
+        print(f"{YELLOW}⚠ Invalid Device ID:{RESET} expected 8 groups of 7 characters separated by hyphens (e.g. XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX).")
+        return
+
     ok, msg = auto_pair_device(device_id)
     if ok:
         print(f"{GREEN}✔ Device Pairing Complete!{RESET}")
@@ -271,7 +283,7 @@ def main():
     parser_audit.set_defaults(func=cmd_audit)
 
     parser_pair = subparsers.add_parser("pair", help="Pair with a remote machine using its Device ID")
-    parser_pair.add_argument("device_id", help="The 52-character Syncthing Device ID of the remote machine")
+    parser_pair.add_argument("device_id", help="The Syncthing Device ID of the remote machine (8 groups of 7 characters, e.g. XXXXXXX-XXXXXXX-...)")
     parser_pair.set_defaults(func=cmd_pair)
 
     args = parser.parse_args()

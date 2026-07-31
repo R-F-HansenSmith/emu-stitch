@@ -62,8 +62,11 @@ def test_cli_no_command_defaults_to_switch(monkeypatch):
     assert calls == ["/detected/Emulation"]
 
 
+VALID_DEVICE_ID = "MFZWI3D-BONSGYC-YLTMK4F-WMZ7IPP-NEEQAIZ-G7JXVJZ-IWNJI4D-YAHOMQ2"
+
+
 def test_cli_pair_dispatches_device_id_to_auto_pair_device(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", "ABCDEFG-HIJKLMN"])
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", VALID_DEVICE_ID])
     calls = []
     monkeypatch.setattr(
         cli_mod, "auto_pair_device",
@@ -72,17 +75,30 @@ def test_cli_pair_dispatches_device_id_to_auto_pair_device(monkeypatch, capsys):
 
     cli_mod.main()
 
-    assert calls == ["ABCDEFG-HIJKLMN"]
+    assert calls == [VALID_DEVICE_ID]
     assert "paired!" in capsys.readouterr().out
 
 
 def test_cli_pair_reports_failure_without_raising(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", "bad-id"])
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", VALID_DEVICE_ID])
     monkeypatch.setattr(cli_mod, "auto_pair_device", lambda device_id: (False, "not found"))
 
     cli_mod.main()
 
     assert "not found" in capsys.readouterr().out
+
+
+def test_cli_pair_rejects_malformed_device_id_without_calling_api(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", "not-a-real-device-id"])
+
+    def fail_pair(*a, **k):
+        raise AssertionError("auto_pair_device should not be called for a malformed device ID")
+
+    monkeypatch.setattr(cli_mod, "auto_pair_device", fail_pair)
+
+    cli_mod.main()
+
+    assert "Invalid Device ID" in capsys.readouterr().out
 
 
 class TestPromptYesNo:

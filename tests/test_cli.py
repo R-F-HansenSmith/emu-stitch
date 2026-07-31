@@ -212,19 +212,24 @@ def test_cli_audit_lists_all_profiles_with_per_profile_game_counts(tmp_path, mon
 
     out = capsys.readouterr().out
     assert "Save Profiles (2 known)" in out
-    assert "alice" in out and "(ACTIVE)" in out
-    assert "5 Ryujinx, 1 Cemu" in out
-    assert "bob" in out
-    assert "2 Ryujinx, 0 Cemu" in out
 
-    # alice has a known Steam ID (mapped in user_map.json), bob doesn't yet.
-    # Isolate the Save Profiles section specifically: section 2's unrelated
-    # "Active Steam User Profile: alice (ID3: 123)" line also contains the
-    # substring "ID3: 123", so a bare substring check would be a false
-    # positive regardless of whether section 3 shows it.
+    # Isolate the Save Profiles table specifically, since section 2's
+    # unrelated "Active Steam User Profile: alice (ID3: 123)" line also
+    # contains "alice" and "123".
     profiles_section = out.split("Save Profiles")[1].split("Detected System Emulators")[0]
-    assert "[ID3: 123]" in profiles_section
-    assert "[ID3:" not in profiles_section.split("[ID3: 123]")[1]  # bob has none
+    lines = profiles_section.splitlines()
+
+    alice_row = next(l for l in lines if "alice" in l)
+    assert "123" in alice_row  # steamid3
+    assert "●" in alice_row  # active marker
+    assert "5" in alice_row  # ryujinx count
+    assert "1" in alice_row  # cemu count
+
+    bob_row = next(l for l in lines if "bob" in l)
+    assert "●" not in bob_row  # not active
+    assert "-" in bob_row  # no known steamid3
+    assert "2" in bob_row  # ryujinx count
+    assert "0" in bob_row  # cemu count
 
 
 def test_cli_audit_omits_steamid_note_for_unmapped_profile(tmp_path, monkeypatch, capsys):
@@ -263,20 +268,20 @@ class TestPromptYesNo:
         assert cli_mod.prompt_yes_no("Proceed?", auto_yes=True) is True
 
     def test_empty_input_returns_default(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "")
+        monkeypatch.setattr("builtins.input", lambda: "")
 
         assert cli_mod.prompt_yes_no("Proceed?", default=True) is True
         assert cli_mod.prompt_yes_no("Proceed?", default=False) is False
 
     def test_parses_yes_and_no_answers(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "y")
+        monkeypatch.setattr("builtins.input", lambda: "y")
         assert cli_mod.prompt_yes_no("Proceed?", default=False) is True
 
-        monkeypatch.setattr("builtins.input", lambda prompt: "n")
+        monkeypatch.setattr("builtins.input", lambda: "n")
         assert cli_mod.prompt_yes_no("Proceed?", default=True) is False
 
     def test_keyboard_interrupt_returns_false(self, monkeypatch):
-        def raise_interrupt(prompt):
+        def raise_interrupt():
             raise KeyboardInterrupt()
 
         monkeypatch.setattr("builtins.input", raise_interrupt)
@@ -294,32 +299,32 @@ class TestPromptInt:
         assert cli_mod.prompt_int("How many?", default=3, auto_yes=True) == 3
 
     def test_empty_input_returns_default(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "")
+        monkeypatch.setattr("builtins.input", lambda: "")
 
         assert cli_mod.prompt_int("How many?", default=3) == 3
 
     def test_parses_a_valid_number(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "5")
+        monkeypatch.setattr("builtins.input", lambda: "5")
 
         assert cli_mod.prompt_int("How many?", default=3) == 5
 
     def test_zero_is_a_valid_answer(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "0")
+        monkeypatch.setattr("builtins.input", lambda: "0")
 
         assert cli_mod.prompt_int("How many?", default=3) == 0
 
     def test_non_numeric_input_falls_back_to_default(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "banana")
+        monkeypatch.setattr("builtins.input", lambda: "banana")
 
         assert cli_mod.prompt_int("How many?", default=3) == 3
 
     def test_negative_input_falls_back_to_default(self, monkeypatch):
-        monkeypatch.setattr("builtins.input", lambda prompt: "-1")
+        monkeypatch.setattr("builtins.input", lambda: "-1")
 
         assert cli_mod.prompt_int("How many?", default=3) == 3
 
     def test_keyboard_interrupt_returns_default(self, monkeypatch):
-        def raise_interrupt(prompt):
+        def raise_interrupt():
             raise KeyboardInterrupt()
 
         monkeypatch.setattr("builtins.input", raise_interrupt)

@@ -17,6 +17,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
 ]
+dependencies = [
+    "rich>=14.3.4",
+]
 
 [project.urls]
 Homepage = "https://github.com/R-F-HansenSmith/emu-stitch"

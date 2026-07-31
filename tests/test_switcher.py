@@ -71,6 +71,27 @@ def test_run_switch_persists_user_map(tmp_path, fake_steam_user):
     assert user_map["123"] == "TestUser"
 
 
+def test_user_map_write_does_not_corrupt_existing_file_on_failure(tmp_path, fake_steam_user, monkeypatch):
+    """If the final rename step fails, the on-disk map must remain the
+    last-known-good JSON, never a partial/corrupted write."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    saves_base = emu_dir / "saves_by_user"
+    saves_base.mkdir()
+    map_file = saves_base / "user_map.json"
+    map_file.write_text(json.dumps({"999": "OldUser"}, indent=2))
+
+    monkeypatch.setattr(
+        switcher_mod.os, "replace",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("simulated failure")),
+    )
+
+    with pytest.raises(OSError):
+        run_switch(str(emu_dir))
+
+    assert json.loads(map_file.read_text()) == {"999": "OldUser"}
+
+
 def test_run_switch_leaves_no_leftover_tmp_symlink(tmp_path, fake_steam_user):
     emu_dir = tmp_path / "Emulation"
     emu_dir.mkdir()

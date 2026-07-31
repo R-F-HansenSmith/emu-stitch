@@ -17,12 +17,20 @@ from .emulators import configure_all_emulators
 from .syncthing import generate_stignore
 
 
+def _atomic_write_json(path: str, data: Dict[str, str]) -> None:
+    """Write JSON to `path` via temp-file + os.replace, so a failed or
+    interrupted write can never leave `path` truncated or corrupted."""
+    tmp_path = f"{path}.tmp-{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, path)
+
+
 def load_user_map(map_file: str) -> Dict[str, str]:
     """Load or initialize generic user profile map JSON."""
     if not os.path.exists(map_file):
         initial_map: Dict[str, str] = {}
-        with open(map_file, "w") as f:
-            json.dump(initial_map, f, indent=2)
+        _atomic_write_json(map_file, initial_map)
         return initial_map
     try:
         with open(map_file, "r") as f:
@@ -54,13 +62,11 @@ def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
         elif persona:
             profile_name = sanitize_name(persona)
             user_map[steamid3] = profile_name
-            with open(map_file, "w") as f:
-                json.dump(user_map, f, indent=2)
+            _atomic_write_json(map_file, user_map)
         else:
             profile_name = f"User_{steamid3}"
             user_map[steamid3] = profile_name
-            with open(map_file, "w") as f:
-                json.dump(user_map, f, indent=2)
+            _atomic_write_json(map_file, user_map)
 
     target_profile_dir = os.path.join(saves_base, profile_name)
     os.makedirs(target_profile_dir, exist_ok=True)

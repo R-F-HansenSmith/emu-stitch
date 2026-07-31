@@ -382,7 +382,7 @@ def cmd_audit(args):
         print_section_header(5, "Syncthing & Paired Devices")
         api_key, dev_id = get_syncthing_credentials()
         if dev_id:
-            cprint(f"   Device ID: [bold]{esc(dev_id)}[/]")
+            cprint(f"   This Machine's Device ID: [bold]{esc(dev_id)}[/]")
 
         devices = get_paired_devices_status()
         cprint(f"\n   Paired Remote Devices ({len(devices)} paired):")

@@ -134,7 +134,7 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
      3 unique title(s) across 3 save record(s)
 
 5. Syncthing & Paired Devices ──────────────────
-   Device ID: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
+   This Machine's Device ID: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
 
    Paired Remote Devices (1 paired):
    ╭──────────────────┬────────┬─────────────────────╮

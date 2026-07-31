@@ -260,7 +260,7 @@ def cmd_audit(args):
             for d in devices:
                 status_icon = f"{GREEN}ONLINE{RESET}" if d["connected"] else f"{YELLOW}OFFLINE{RESET}"
                 print(f"   • {BOLD}{d['name']}{RESET} [{status_icon}]")
-                print(f"     ID: {d['id'][:14]}... | Address: {d['address']}")
+                print(f"     ID: {d['id']} | Address: {d['address']}")
     else:
         print(f"\n{CYAN}5. Syncthing Status:{RESET} {st_msg}")
 

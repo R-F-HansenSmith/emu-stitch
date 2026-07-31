@@ -126,10 +126,10 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
      3 save ID index(es) active
 
 5. Syncthing & Paired Devices:
-   This Machine's Device ID: XXXXXXX-XXXXXXX-...
+   This Machine's Device ID: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
    Paired Remote Devices (1 paired):
    • deck-living-room        [ONLINE]
-     ID: YYYYYYY...  |  Address: 192.168.1.42:22000
+     ID: YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY  |  Address: 192.168.1.42:22000
 ```
 
 ---

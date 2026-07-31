@@ -101,6 +101,32 @@ def test_cli_pair_rejects_malformed_device_id_without_calling_api(monkeypatch, c
     assert "Invalid Device ID" in capsys.readouterr().out
 
 
+def test_cli_audit_prints_full_paired_device_id(tmp_path, monkeypatch, capsys):
+    """The paired-device ID must be shown in full: it's needed to verify or
+    re-pair a device, and a truncated ID is useless for that."""
+    full_device_id = "GRCJWQE-FENHH3D-YLTMK4F-WMZ7IPP-NEEQAIZ-G7JXVJZ-IWNJI4D-YAHOMQ2"
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
+    monkeypatch.setattr(cli_mod, "audit_mount_permissions", lambda d: (False, "/home", "ok"))
+    monkeypatch.setattr(cli_mod, "detect_active_steam_user", lambda: ("123", "Alice"))
+    monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+    monkeypatch.setattr(cli_mod, "get_profile_sync_status", lambda p: ("UNKNOWN", "n/a"))
+    monkeypatch.setattr(cli_mod, "audit_emulator_saves", lambda p: [])
+    monkeypatch.setattr(cli_mod, "ensure_syncthing_service", lambda enable=False: (True, "running"))
+    monkeypatch.setattr(cli_mod, "get_syncthing_credentials", lambda: ("apikey", "SELF-ID"))
+    monkeypatch.setattr(
+        cli_mod, "get_paired_devices_status",
+        lambda: [{"id": full_device_id, "name": "Device-GRCJWQE", "connected": False, "address": "offline"}],
+    )
+
+    cli_mod.main()
+
+    assert full_device_id in capsys.readouterr().out
+
+
 class TestPromptYesNo:
     def test_auto_yes_skips_prompt_entirely(self, monkeypatch):
         def fail_input(*a, **k):

@@ -65,14 +65,33 @@ def ensure_syncthing_service(enable: bool = False) -> Result:
     return False, "Syncthing service is currently inactive."
 
 
+def _fetch_own_device_id(api_key: str) -> Optional[str]:
+    """Query the Syncthing REST API for this machine's own Device ID.
+
+    Syncthing derives its Device ID from its TLS certificate at runtime —
+    it is never written to config.xml — so it can only be read back via
+    /rest/system/status ("myID" field).
+    """
+    url = f"{_syncthing_base_url()}/rest/system/status"
+    req = urllib.request.Request(url, headers={"X-API-Key": api_key})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+            status = json.loads(resp.read().decode("utf-8"))
+        return status.get("myID")
+    except Exception as e:
+        logging.error(f"Error fetching Syncthing device ID from REST API: {e}")
+        return None
+
+
 def get_syncthing_credentials() -> Tuple[Optional[str], Optional[str]]:
-    """Extract Syncthing API Key and Device ID from config.xml (checking both XDG State and Config dirs)."""
+    """Extract the Syncthing API Key from config.xml (checking both XDG
+    State and Config dirs), and this machine's own Device ID via the REST
+    API (see _fetch_own_device_id)."""
     candidate_paths = [
         os.path.expanduser("~/.local/state/syncthing/config.xml"),
         os.path.expanduser("~/.config/syncthing/config.xml")
     ]
     api_key: Optional[str] = None
-    device_id: Optional[str] = None
 
     for config_xml in candidate_paths:
         if os.path.exists(config_xml):
@@ -82,14 +101,11 @@ def get_syncthing_credentials() -> Tuple[Optional[str], Optional[str]]:
                 api_match = re.search(r'<apikey>([^<]+)</apikey>', content)
                 if api_match:
                     api_key = api_match.group(1).strip()
-                dev_match = re.search(r'<myID>([^<]+)</myID>', content)
-                if dev_match:
-                    device_id = dev_match.group(1).strip()
-                if api_key:
                     break
             except Exception as e:
                 logging.error(f"Error reading syncthing config.xml ({config_xml}): {e}")
 
+    device_id = _fetch_own_device_id(api_key) if api_key else None
     return api_key, device_id
 
 

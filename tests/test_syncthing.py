@@ -33,7 +33,6 @@ CONFIG_XML_TEMPLATE = """\
   <gui>
     <apikey>test-api-key-123</apikey>
   </gui>
-  <myID>LOCAL-DEVICE-XXXXXXXXXX</myID>
 </configuration>
 """
 
@@ -67,11 +66,16 @@ def _mock_urlopen(response_body: bytes, status: int = 200):
 # ---------------------------------------------------------------------------
 
 class TestGetSyncthinqCredentials:
-    def test_extracts_api_key_and_my_id(self, tmp_path, monkeypatch):
+    def test_extracts_api_key_from_config_and_device_id_from_rest_api(self, tmp_path, monkeypatch):
+        # Syncthing derives its own Device ID from its TLS certificate at
+        # runtime rather than storing it in config.xml, so it must come
+        # from the REST API's /rest/system/status endpoint instead.
         _write_config_xml(tmp_path)
         monkeypatch.setattr(os.path, "expanduser", _fake_expanduser(tmp_path))
+        status_body = json.dumps({"myID": "LOCAL-DEVICE-XXXXXXXXXX"}).encode()
 
-        api_key, device_id = get_syncthing_credentials()
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen(status_body)):
+            api_key, device_id = get_syncthing_credentials()
 
         assert api_key == "test-api-key-123"
         assert device_id == "LOCAL-DEVICE-XXXXXXXXXX"
@@ -79,26 +83,28 @@ class TestGetSyncthinqCredentials:
     def test_returns_none_when_no_config_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(os.path, "expanduser", _fake_expanduser(tmp_path))
 
-        api_key, device_id = get_syncthing_credentials()
+        def fail_urlopen(*a, **k):
+            raise AssertionError("should not attempt a REST call without an API key")
+
+        with patch("urllib.request.urlopen", side_effect=fail_urlopen):
+            api_key, device_id = get_syncthing_credentials()
 
         assert api_key is None
         assert device_id is None
 
-    def test_does_not_confuse_remote_device_id_with_myid(self, tmp_path, monkeypatch):
-        # Config has a remote <device id=...> appearing BEFORE <myID>
-        content = """\
-<configuration>
-  <device id="REMOTE-WRONG-ID" name="other" />
-  <gui><apikey>key123</apikey></gui>
-  <myID>CORRECT-LOCAL-ID</myID>
-</configuration>
-"""
-        _write_config_xml(tmp_path, content)
+    def test_device_id_is_none_when_rest_api_unreachable(self, tmp_path, monkeypatch):
+        """A found API key but an unreachable Syncthing REST API (e.g. the
+        service isn't actually running yet) must not raise — just leave the
+        device ID unresolved."""
+        import urllib.error
+        _write_config_xml(tmp_path)
         monkeypatch.setattr(os.path, "expanduser", _fake_expanduser(tmp_path))
 
-        _, device_id = get_syncthing_credentials()
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+            api_key, device_id = get_syncthing_credentials()
 
-        assert device_id == "CORRECT-LOCAL-ID"
+        assert api_key == "test-api-key-123"
+        assert device_id is None
 
 
 # ---------------------------------------------------------------------------

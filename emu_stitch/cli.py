@@ -280,10 +280,11 @@ def cmd_audit(args):
     else:
         for p in profiles:
             marker = f" {GREEN}(ACTIVE){RESET}" if p["active"] else ""
+            steamid_note = f" [ID3: {p['steamid3']}]" if p.get("steamid3") else ""
             profile_games = audit_emulator_saves(p["path"])
             ryu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Ryujinx")), 0)
             cemu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Cemu")), 0)
-            print(f"  • {BOLD}{p['name']}{RESET}{marker} — {ryu_count} Ryujinx, {cemu_count} Cemu")
+            print(f"  • {BOLD}{p['name']}{RESET}{marker}{steamid_note} — {ryu_count} Ryujinx, {cemu_count} Cemu")
 
     # Installed Emulators Audit
     installed_emu = detect_installed_emulators()

@@ -113,7 +113,7 @@ def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
 
 def list_profiles(emu_dir: Optional[str] = None) -> List[Dict[str, object]]:
     """List all known save profiles under saves_by_user, marking which one
-    is currently active. Returns: [{ 'name', 'path', 'active' }, ...]"""
+    is currently active. Returns: [{ 'name', 'path', 'active', 'steamid3' }, ...]"""
     if not emu_dir:
         emu_dir = detect_emulation_dir()
 
@@ -124,6 +124,12 @@ def list_profiles(emu_dir: Optional[str] = None) -> List[Dict[str, object]]:
     if not os.path.isdir(saves_base):
         return []
 
+    map_file = os.path.join(saves_base, "user_map.json")
+    user_map = load_user_map(map_file) if os.path.exists(map_file) else {}
+    steamid_by_name: Dict[str, str] = {}
+    for steamid3, name in user_map.items():
+        steamid_by_name.setdefault(name, steamid3)
+
     profiles = []
     for name in sorted(os.listdir(saves_base)):
         profile_dir = os.path.join(saves_base, name)
@@ -133,6 +139,7 @@ def list_profiles(emu_dir: Optional[str] = None) -> List[Dict[str, object]]:
             "name": name,
             "path": profile_dir,
             "active": os.path.realpath(profile_dir) == active_target,
+            "steamid3": steamid_by_name.get(name),
         })
     return profiles
 

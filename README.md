@@ -118,8 +118,8 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
 2. Active Steam User:        alice (ID3: 123456789)
 
 3. Save Profiles (2 known):
-   • alice (ACTIVE)          — 3 Ryujinx, 1 Cemu
-   • bob                     — 1 Ryujinx, 0 Cemu
+   • alice (ACTIVE) [ID3: 123456789] — 3 Ryujinx, 1 Cemu
+   • bob [ID3: 987654321]            — 1 Ryujinx, 0 Cemu
 
 4. Detected System Emulators:
    • Ryujinx (Switch)        [INSTALLED] → Symlink routing active

@@ -230,6 +230,20 @@ class TestListProfiles:
         names = {p["name"]: p["active"] for p in profiles}
         assert names == {"TestUser": True, "bob": False}
 
+    def test_includes_steamid3_from_user_map_and_none_when_unmapped(self, tmp_path, fake_steam_user):
+        emu_dir = tmp_path / "Emulation"
+        emu_dir.mkdir()
+
+        run_switch(str(emu_dir))  # maps steamid "123" -> "TestUser" in user_map.json
+        saves_base = emu_dir / "saves_by_user"
+        (saves_base / "bob").mkdir()  # no user_map entry for bob
+
+        from emu_stitch.switcher import list_profiles
+        profiles = list_profiles(str(emu_dir))
+
+        steamids = {p["name"]: p["steamid3"] for p in profiles}
+        assert steamids == {"TestUser": "123", "bob": None}
+
     def test_ignores_user_map_json_and_other_files(self, tmp_path):
         emu_dir = tmp_path / "Emulation"
         saves_base = emu_dir / "saves_by_user"

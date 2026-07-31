@@ -182,8 +182,8 @@ def test_cli_audit_lists_all_profiles_with_per_profile_game_counts(tmp_path, mon
     monkeypatch.setattr(
         cli_mod, "list_profiles",
         lambda emu_dir: [
-            {"name": "alice", "path": "/profiles/alice", "active": True},
-            {"name": "bob", "path": "/profiles/bob", "active": False},
+            {"name": "alice", "path": "/profiles/alice", "active": True, "steamid3": "123"},
+            {"name": "bob", "path": "/profiles/bob", "active": False, "steamid3": None},
         ],
     )
 
@@ -205,6 +205,41 @@ def test_cli_audit_lists_all_profiles_with_per_profile_game_counts(tmp_path, mon
     assert "5 Ryujinx, 1 Cemu" in out
     assert "bob" in out
     assert "2 Ryujinx, 0 Cemu" in out
+
+    # alice has a known Steam ID (mapped in user_map.json), bob doesn't yet.
+    # Isolate the Save Profiles section specifically: section 2's unrelated
+    # "Active Steam User Profile: alice (ID3: 123)" line also contains the
+    # substring "ID3: 123", so a bare substring check would be a false
+    # positive regardless of whether section 3 shows it.
+    profiles_section = out.split("Save Profiles")[1].split("Detected System Emulators")[0]
+    assert "[ID3: 123]" in profiles_section
+    assert "[ID3:" not in profiles_section.split("[ID3: 123]")[1]  # bob has none
+
+
+def test_cli_audit_omits_steamid_note_for_unmapped_profile(tmp_path, monkeypatch, capsys):
+    """A profile with no user_map.json entry (steamid3=None) must not print
+    a bogus 'ID3: None' note."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
+    monkeypatch.setattr(cli_mod, "audit_mount_permissions", lambda d: (False, "/home", "ok"))
+    monkeypatch.setattr(cli_mod, "detect_active_steam_user", lambda: ("123", "alice"))
+    monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+    monkeypatch.setattr(cli_mod, "get_profile_sync_status", lambda p: ("UNKNOWN", "n/a"))
+    monkeypatch.setattr(cli_mod, "ensure_syncthing_service", lambda enable=False: (False, "not running"))
+    monkeypatch.setattr(cli_mod, "audit_emulator_saves", lambda path: [])
+    monkeypatch.setattr(
+        cli_mod, "list_profiles",
+        lambda emu_dir: [{"name": "bob", "path": "/profiles/bob", "active": False, "steamid3": None}],
+    )
+
+    cli_mod.main()
+
+    out = capsys.readouterr().out
+    assert "ID3: None" not in out
+    assert "bob" in out
 
 
 class TestPromptYesNo:

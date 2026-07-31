@@ -6,6 +6,7 @@ conditional save symlinking, anti-loop safeguards, save payload mirroring, and s
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import datetime
@@ -16,6 +17,10 @@ KNOWN_TITLE_MAP: Dict[str, str] = {
     "00050000/101c9500": "The Legend of Zelda: Breath of the Wild (EU)",
     "00050000/101c9300": "The Legend of Zelda: Breath of the Wild (JP)",
 }
+
+# Wii U title IDs are 8 hex digits starting with 0005 (e.g. 00050000 for disc
+# titles, 00050010 for eShop/digital titles, 0005000e for DLC).
+CEMU_TITLE_ID_RE = re.compile(r'^0005[0-9a-fA-F]{4}$')
 
 
 def is_flatpak_installed(app_id: str) -> bool:
@@ -134,17 +139,20 @@ def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
     # 1. Ryujinx (Nintendo Switch)
     ryu_saves = os.path.join(active_link, "ryujinx", "saves")
     if os.path.exists(ryu_saves):
-        save_ids = [d for d in os.listdir(ryu_saves) if os.path.isdir(os.path.join(ryu_saves, d)) and d.startswith("00000000")]
-        if save_ids:
+        save_ids = sorted(
+            d for d in os.listdir(ryu_saves)
+            if os.path.isdir(os.path.join(ryu_saves, d)) and d.startswith("00000000")
+        )
+        for sid in save_ids:
             has_odyssey = any(
                 os.path.exists(os.path.join(ryu_saves, sid, slot, "File1.bin"))
-                for sid in save_ids for slot in ["0", "1"]
+                for slot in ["0", "1"]
             )
             title = "Super Mario Odyssey" if has_odyssey else "Switch Game Save Data"
             detected_saves.append({
                 "emulator": "Ryujinx (Switch)",
                 "name": title,
-                "details": f"{len(save_ids)} save ID index(es) active"
+                "details": f"Save ID: {sid}"
             })
 
     # 2. Cemu (Wii U)
@@ -158,7 +166,7 @@ def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
                     "name": KNOWN_TITLE_MAP[rel_path],
                     "details": f"Save folder: {rel_path}"
                 })
-            elif len(rel_path.split(os.sep)) == 2 and rel_path.startswith("00050000"):
+            elif len(rel_path.split(os.sep)) == 2 and CEMU_TITLE_ID_RE.match(rel_path.split(os.sep)[0]):
                 if not any(s["details"].endswith(rel_path) for s in detected_saves):
                     detected_saves.append({
                         "emulator": "Cemu (Wii U)",

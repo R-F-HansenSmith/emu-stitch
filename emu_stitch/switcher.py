@@ -10,7 +10,7 @@ import json
 import shutil
 import logging
 import datetime
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name
 from .emulators import configure_all_emulators
@@ -106,6 +106,32 @@ def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
     # Route emulators & mirror save payloads
     configure_all_emulators(emu_dir, active_link, profile_name)
     return profile_name, real_target
+
+
+def list_profiles(emu_dir: Optional[str] = None) -> List[Dict[str, object]]:
+    """List all known save profiles under saves_by_user, marking which one
+    is currently active. Returns: [{ 'name', 'path', 'active' }, ...]"""
+    if not emu_dir:
+        emu_dir = detect_emulation_dir()
+
+    saves_base = os.path.join(emu_dir, "saves_by_user")
+    active_link = os.path.join(emu_dir, "saves")
+    active_target = os.path.realpath(active_link) if os.path.islink(active_link) else None
+
+    if not os.path.isdir(saves_base):
+        return []
+
+    profiles = []
+    for name in sorted(os.listdir(saves_base)):
+        profile_dir = os.path.join(saves_base, name)
+        if not os.path.isdir(profile_dir):
+            continue
+        profiles.append({
+            "name": name,
+            "path": profile_dir,
+            "active": os.path.realpath(profile_dir) == active_target,
+        })
+    return profiles
 
 
 def setup_systemd_watcher() -> Tuple[bool, str]:

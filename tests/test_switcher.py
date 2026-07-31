@@ -188,3 +188,40 @@ def test_setup_systemd_watcher_survives_a_hung_systemctl(tmp_path, monkeypatch):
 
     assert ok is False
     assert captured["timeout"] is not None
+
+
+class TestListProfiles:
+    def test_lists_all_profile_directories_and_marks_active_one(self, tmp_path, fake_steam_user):
+        emu_dir = tmp_path / "Emulation"
+        emu_dir.mkdir()
+
+        run_switch(str(emu_dir))  # creates the "TestUser" profile and activates it
+        saves_base = emu_dir / "saves_by_user"
+        (saves_base / "bob").mkdir()
+
+        from emu_stitch.switcher import list_profiles
+        profiles = list_profiles(str(emu_dir))
+
+        names = {p["name"]: p["active"] for p in profiles}
+        assert names == {"TestUser": True, "bob": False}
+
+    def test_ignores_user_map_json_and_other_files(self, tmp_path):
+        emu_dir = tmp_path / "Emulation"
+        saves_base = emu_dir / "saves_by_user"
+        saves_base.mkdir(parents=True)
+        (saves_base / "user_map.json").write_text("{}")
+        (saves_base / "alice").mkdir()
+
+        from emu_stitch.switcher import list_profiles
+        profiles = list_profiles(str(emu_dir))
+
+        assert [p["name"] for p in profiles] == ["alice"]
+
+    def test_returns_empty_list_when_no_profiles_exist_yet(self, tmp_path):
+        emu_dir = tmp_path / "Emulation"
+        emu_dir.mkdir()
+
+        from emu_stitch.switcher import list_profiles
+        profiles = list_profiles(str(emu_dir))
+
+        assert profiles == []

@@ -199,3 +199,46 @@ class TestPromptYesNo:
         monkeypatch.setattr("builtins.input", raise_interrupt)
 
         assert cli_mod.prompt_yes_no("Proceed?", default=True) is False
+
+
+class TestPromptInt:
+    def test_auto_yes_skips_prompt_entirely(self, monkeypatch):
+        def fail_input(*a, **k):
+            raise AssertionError("input() should not be called when auto_yes=True")
+
+        monkeypatch.setattr("builtins.input", fail_input)
+
+        assert cli_mod.prompt_int("How many?", default=3, auto_yes=True) == 3
+
+    def test_empty_input_returns_default(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda prompt: "")
+
+        assert cli_mod.prompt_int("How many?", default=3) == 3
+
+    def test_parses_a_valid_number(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda prompt: "5")
+
+        assert cli_mod.prompt_int("How many?", default=3) == 5
+
+    def test_zero_is_a_valid_answer(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda prompt: "0")
+
+        assert cli_mod.prompt_int("How many?", default=3) == 0
+
+    def test_non_numeric_input_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda prompt: "banana")
+
+        assert cli_mod.prompt_int("How many?", default=3) == 3
+
+    def test_negative_input_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda prompt: "-1")
+
+        assert cli_mod.prompt_int("How many?", default=3) == 3
+
+    def test_keyboard_interrupt_returns_default(self, monkeypatch):
+        def raise_interrupt(prompt):
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr("builtins.input", raise_interrupt)
+
+        assert cli_mod.prompt_int("How many?", default=3) == 3

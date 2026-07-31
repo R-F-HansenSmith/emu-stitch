@@ -60,6 +60,26 @@ def prompt_yes_no(question, default=True, auto_yes=False):
         print()
         return False
 
+def prompt_int(question, default, auto_yes=False):
+    """Interactive helper to ask for a non-negative integer, falling back to
+    `default` on empty/invalid input or non-interactive mode."""
+    if auto_yes:
+        return default
+    try:
+        raw = input(f"{BOLD}{question}{RESET} [{default}]: ").strip()
+        if not raw:
+            return default
+        value = int(raw)
+        if value < 0:
+            raise ValueError("negative")
+        return value
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    except ValueError:
+        print(f"{YELLOW}Invalid number entered, using default ({default}).{RESET}")
+        return default
+
 def cmd_setup(args):
     print_banner()
     auto_yes = getattr(args, "yes", False)

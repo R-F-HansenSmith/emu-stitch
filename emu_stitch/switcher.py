@@ -84,9 +84,8 @@ def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
     # Atomic symlink update: build the new symlink at a temp path, then
     # os.replace() it into place. This is atomic on POSIX and avoids any
     # window where `active_link` doesn't exist.
-    current_target = os.readlink(active_link) if os.path.islink(active_link) else None
     real_target = os.path.abspath(target_profile_dir)
-    real_current = os.path.abspath(current_target) if current_target else None
+    real_current = os.path.realpath(active_link) if os.path.islink(active_link) else None
 
     if real_current != real_target:
         tmp_link = active_link + f".tmp-{os.getpid()}"

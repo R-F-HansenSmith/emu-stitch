@@ -101,6 +101,30 @@ def test_run_switch_migration_leaves_backup_not_deletes(tmp_path, fake_steam_use
     assert (backups[0] / "precious.srm").read_text() == "very important save"
 
 
+def test_run_switch_recognizes_correct_relative_symlink(tmp_path, fake_steam_user, monkeypatch):
+    """A relative `saves` symlink must be resolved relative to its own
+    directory, not the process CWD, when deciding whether it already points
+    at the right profile."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    saves_base = emu_dir / "saves_by_user"
+    saves_base.mkdir()
+    target_dir = saves_base / "TestUser"
+    target_dir.mkdir()
+
+    active_link = emu_dir / "saves"
+    relative_target = os.path.join("saves_by_user", "TestUser")
+    os.symlink(relative_target, str(active_link))
+
+    # Run from an unrelated CWD so a CWD-relative abspath computation would
+    # incorrectly conclude the symlink points elsewhere.
+    monkeypatch.chdir(tmp_path)
+
+    run_switch(str(emu_dir))
+
+    assert os.readlink(str(active_link)) == relative_target
+
+
 def test_setup_systemd_watcher_creates_unit_files(tmp_path, monkeypatch):
     import subprocess
     fake_home = tmp_path / "home"

@@ -307,7 +307,7 @@ def get_paired_devices_status() -> List[Dict[str, object]]:
             name = dev.get("name") or f"Device-{dev_id[:7]}"
             conn_info = conns.get(dev_id, {})
             is_connected = conn_info.get("connected", False)
-            addr = conn_info.get("address", "offline")
+            addr = conn_info.get("address") or "offline"
             device_list.append({
                 "id": dev_id,
                 "name": name,

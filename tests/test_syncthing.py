@@ -456,3 +456,27 @@ class TestGetPairedDevicesStatus:
 
         assert devices[0]["connected"] is False
         assert devices[0]["address"] == "offline"
+
+    def test_returns_offline_address_when_connection_entry_has_empty_address(self, monkeypatch):
+        """Syncthing includes a connection entry for every known device, even
+        ones that have never connected, with an empty-string address rather
+        than omitting the key entirely."""
+        config_body = json.dumps({
+            "devices": [{"deviceID": "REMOTE1", "name": "Remote1"}]
+        }).encode()
+        conns_body = json.dumps({
+            "connections": {"REMOTE1": {"connected": False, "address": ""}}
+        }).encode()
+        monkeypatch.setattr(st_mod, "get_syncthing_credentials", lambda: ("key", None))
+
+        call_count = {"n": 0}
+        def fake_urlopen(req, timeout=None):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _mock_urlopen(config_body)
+            return _mock_urlopen(conns_body)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            devices = get_paired_devices_status()
+
+        assert devices[0]["address"] == "offline"

@@ -44,7 +44,7 @@ def ensure_syncthing_service(enable: bool = False) -> Result:
         try:
             res = subprocess.run(
                 ["systemctl", "--user", "enable", "--now", "syncthing.service"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=10,
             )
             if res.returncode != 0:
                 return False, f"systemctl failed (exit {res.returncode}): {res.stderr.strip()}"
@@ -53,7 +53,13 @@ def ensure_syncthing_service(enable: bool = False) -> Result:
             return False, f"Error enabling syncthing service: {e}"
 
     # Check active status
-    res = subprocess.run(["systemctl", "--user", "is-active", "syncthing.service"], capture_output=True, text=True)
+    try:
+        res = subprocess.run(
+            ["systemctl", "--user", "is-active", "syncthing.service"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception as e:
+        return False, f"Error checking syncthing service status: {e}"
     if res.returncode == 0 and "active" in res.stdout:
         return True, "Syncthing service is running."
     return False, "Syncthing service is currently inactive."

@@ -5,8 +5,10 @@ import shutil
 
 import pytest
 
+import subprocess
+
 import emu_stitch.emulators as emulators_mod
-from emu_stitch.emulators import _safe_replace_with_symlink, detect_installed_emulators
+from emu_stitch.emulators import _safe_replace_with_symlink, detect_installed_emulators, is_flatpak_installed
 
 
 def test_safe_replace_migrates_real_directory_and_creates_backup(tmp_path):
@@ -161,3 +163,17 @@ def test_detect_installed_emulators_cemu_present_via_binary(tmp_path, monkeypatc
 
     assert result["cemu"] is True
     assert result["ryujinx"] is False
+
+
+def test_is_flatpak_installed_passes_a_timeout_and_survives_a_hang(monkeypatch):
+    """A hung `flatpak info` call must not hang the CLI forever."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, timeout=None):
+        captured["timeout"] = timeout
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert is_flatpak_installed("org.ryujinx.Ryujinx") is False
+    assert captured["timeout"] is not None

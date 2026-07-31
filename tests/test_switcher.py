@@ -164,3 +164,27 @@ def test_setup_systemd_watcher_creates_unit_files(tmp_path, monkeypatch):
     assert service_file.exists()
     assert "loginusers.vdf" in path_file.read_text()
     assert "emu-stitch switch" in service_file.read_text()
+
+
+def test_setup_systemd_watcher_survives_a_hung_systemctl(tmp_path, monkeypatch):
+    """A hung `systemctl` call must not hang the CLI forever, and must be
+    reported as a clean failure rather than an unhandled exception."""
+    import subprocess
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+
+    captured = {}
+
+    def fake_run(cmd, capture_output=False, text=False, timeout=None):
+        captured["timeout"] = timeout
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    from emu_stitch.switcher import setup_systemd_watcher
+    ok, msg = setup_systemd_watcher()
+
+    assert ok is False
+    assert captured["timeout"] is not None

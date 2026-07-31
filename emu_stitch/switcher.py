@@ -142,8 +142,11 @@ def setup_systemd_watcher() -> Tuple[bool, str]:
         with open(service_unit, "w") as f:
             f.write(service_content)
 
-        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-        res = subprocess.run(["systemctl", "--user", "enable", "--now", "emu-stitch-watcher.path"], capture_output=True, text=True)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=10)
+        res = subprocess.run(
+            ["systemctl", "--user", "enable", "--now", "emu-stitch-watcher.path"],
+            capture_output=True, text=True, timeout=10,
+        )
         if res.returncode == 0:
             return True, "systemd loginusers.vdf watcher enabled for automatic profile switching on Steam user change."
         return False, f"systemctl failed: {res.stderr.strip()}"

@@ -188,6 +188,22 @@ class TestEnsureSyncthing:
 
         assert ok is True
 
+    def test_status_check_survives_a_hung_systemctl(self, monkeypatch):
+        """A hung `systemctl is-active` call must not hang the CLI forever."""
+        monkeypatch.setattr(st_mod, "check_syncthing_installed", lambda: True)
+        captured = {}
+
+        def fake_run(cmd, capture_output=False, text=False, timeout=None):
+            captured["timeout"] = timeout
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        ok, msg = ensure_syncthing_service(enable=False)
+
+        assert ok is False
+        assert captured["timeout"] is not None
+
 
 # ---------------------------------------------------------------------------
 # auto_add_syncthing_folder

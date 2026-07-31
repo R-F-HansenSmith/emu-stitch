@@ -21,7 +21,7 @@ KNOWN_TITLE_MAP: Dict[str, str] = {
 def is_flatpak_installed(app_id: str) -> bool:
     """Check if a Flatpak application is installed."""
     try:
-        res = subprocess.run(["flatpak", "info", app_id], capture_output=True, text=True)
+        res = subprocess.run(["flatpak", "info", app_id], capture_output=True, text=True, timeout=5)
         return res.returncode == 0
     except Exception:
         return False

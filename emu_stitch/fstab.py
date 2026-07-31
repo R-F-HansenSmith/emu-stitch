@@ -24,7 +24,7 @@ def audit_mount_permissions(emulation_dir: str) -> Tuple[bool, str, str]:
         return False, "/home", "Internal Storage (/home) - standard execution permissions active."
 
     try:
-        res = subprocess.run(["mount"], capture_output=True, text=True, check=True)
+        res = subprocess.run(["mount"], capture_output=True, text=True, check=True, timeout=10)
         mounts = res.stdout.splitlines()
 
         matching_mount = None

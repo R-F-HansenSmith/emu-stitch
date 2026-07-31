@@ -14,7 +14,7 @@ FAKE_MOUNT_OUTPUT = (
 
 
 def test_audit_mount_permissions_does_not_confuse_similarly_prefixed_mounts(monkeypatch):
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout=None):
         assert cmd == ["mount"]
         return subprocess.CompletedProcess(cmd, 0, stdout=FAKE_MOUNT_OUTPUT, stderr="")
 
@@ -36,7 +36,7 @@ SINGLE_MOUNT_OUTPUT = "/dev/sda1 on /mnt/dec type ext4 (rw,noexec,relatime)\n"
 
 
 def test_audit_mount_permissions_does_not_match_unrelated_sibling_directory(monkeypatch):
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout=None):
         return subprocess.CompletedProcess(cmd, 0, stdout=SINGLE_MOUNT_OUTPUT, stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -49,7 +49,7 @@ def test_audit_mount_permissions_does_not_match_unrelated_sibling_directory(monk
 
 
 def test_audit_mount_permissions_matches_exact_mount_point(monkeypatch):
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout=None):
         return subprocess.CompletedProcess(cmd, 0, stdout=FAKE_MOUNT_OUTPUT, stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -57,6 +57,24 @@ def test_audit_mount_permissions_matches_exact_mount_point(monkeypatch):
     is_noexec, mount_pt, msg = audit_mount_permissions("/mnt/deck")
 
     assert mount_pt == "/mnt/deck"
+    assert is_noexec is False
+
+
+def test_audit_mount_permissions_passes_a_timeout_and_survives_a_hang(monkeypatch):
+    """A hung `mount` call (e.g. a stale NFS mount) must not hang the CLI
+    forever: subprocess.run must be given a timeout, and a resulting
+    TimeoutExpired must be handled gracefully rather than propagating."""
+    captured = {}
+
+    def fake_run(cmd, capture_output, text, check, timeout=None):
+        captured["timeout"] = timeout
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    is_noexec, mount_pt, msg = audit_mount_permissions("/mnt/deck/Emulation")
+
+    assert captured["timeout"] is not None
     assert is_noexec is False
 
 

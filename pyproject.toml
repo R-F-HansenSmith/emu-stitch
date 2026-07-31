@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/R-F-Hansen-Smith/emu-stitch"
+Homepage = "https://github.com/R-F-HansenSmith/emu-stitch"
 
 [project.scripts]
 emu-stitch = "emu_stitch.cli:main"

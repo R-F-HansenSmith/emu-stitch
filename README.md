@@ -17,7 +17,7 @@ If multiple people share a gaming handheld, their emulator save files will overw
 It also keeps saves synced across multiple machines via [Syncthing](https://syncthing.net/), so your progress follows you from your Steam Deck to your desktop and back.
 
 **Key guarantees:**
-- No save data is ever deleted. Real directories are renamed to a timestamped backup before being replaced with symlinks.
+- Active save data is never deleted. Real directories are renamed to a timestamped backup before being replaced with symlinks. Old backups are pruned on a rolling basis (configurable, default: keep the last 3; set to 0 to keep every backup forever).
 - Profile switches are atomic. There is no window where a save directory doesn't exist.
 - Zero runtime dependencies. Pure Python stdlib — works on any Linux image without `pip install`.
 
@@ -181,7 +181,9 @@ loginusers.vdf parsed → active user: alice
 
 When emu-stitch needs to replace a real directory with a symlink (first run or emulator config migration), it:
 1. Merges the contents into the new profile directory (destination files win — existing saves are never overwritten)
-2. Renames the original to `<path>.bak-YYYYMMDD-HHMMSS` — never deletes it
+2. Renames the original to `<path>.bak-YYYYMMDD-HHMMSS`
+
+Backups are kept on a rolling basis: only the N most recent `.bak-*` folders per path are retained, and older ones are pruned automatically. You're asked to set N (default 3) the first time you run `emu-stitch setup`; enter `0` to keep every backup forever (the original behavior). Change it later by editing `backup_retention` in `~/.config/emu-stitch/config.json`.
 
 ---
 
@@ -193,7 +195,7 @@ emu-stitch uses [Syncthing](https://syncthing.net/) to sync saves between machin
 
 1. Install Syncthing on both machines
 2. Run `emu-stitch setup` on each machine to register save folders
-3. Find the Device ID on machine B: `emu-stitch audit` (shown in section 5)
+3. Find the Device ID on machine B: `emu-stitch audit` (shown in section 6)
 4. On machine A, pair with machine B:
    ```bash
    emu-stitch pair <MACHINE-B-DEVICE-ID>

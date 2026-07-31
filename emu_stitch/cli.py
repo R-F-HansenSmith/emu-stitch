@@ -8,6 +8,7 @@ import re
 import sys
 import logging
 import argparse
+from .config import DEFAULT_BACKUP_RETENTION, is_configured, set_backup_retention
 from .detector import detect_emulation_dir, detect_active_steam_user
 from .switcher import run_switch, setup_systemd_watcher, list_profiles
 from .fstab import audit_mount_permissions
@@ -144,6 +145,16 @@ def cmd_setup(args):
             default=True, auto_yes=auto_yes,
         )
 
+    backup_config_done = is_configured()
+    backup_retention = None
+    if backup_config_done:
+        print(f"{GREEN}✔ Backup retention:{RESET} already configured\n")
+    else:
+        backup_retention = prompt_int(
+            "How many old backup copies to keep per profile? (0 = keep forever)",
+            default=DEFAULT_BACKUP_RETENTION, auto_yes=auto_yes,
+        )
+
     # --- Summary of planned changes ---
     changes = []
     if not autostart_done and do_autostart:
@@ -152,6 +163,8 @@ def cmd_setup(args):
         changes.append("  • Enable and start syncthing.service")
     if do_syncthing_register:
         changes.append("  • Register save folder in Syncthing")
+    if not backup_config_done:
+        changes.append(f"  • Set backup retention to {backup_retention} (0 = keep forever)")
     changes.append("  • Switch active save profile symlink")
 
     print(f"\n{BOLD}The following changes will be made:{RESET}")
@@ -165,6 +178,10 @@ def cmd_setup(args):
 
     # --- Apply changes ---
     print()
+
+    if not backup_config_done:
+        set_backup_retention(backup_retention)
+        print(f"{GREEN}✔ Backup retention set to:{RESET} {backup_retention} (0 = keep forever)\n")
 
     profile, path = run_switch(emu_dir)
     print(f"{GREEN}✔ Active save profile:{RESET} {BOLD}{profile}{RESET} ({path})\n")

@@ -1,5 +1,6 @@
 """Tests for emu_stitch.cli: argument dispatch and top-level error handling."""
 
+import os
 import sys
 
 import pytest
@@ -242,3 +243,45 @@ class TestPromptInt:
         monkeypatch.setattr("builtins.input", raise_interrupt)
 
         assert cli_mod.prompt_int("How many?", default=3) == 3
+
+
+class TestSetupBackupRetention:
+    def _mock_common_setup_deps(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "argv", ["emu-stitch", "setup", "-y"])
+        monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(tmp_path / "Emulation"))
+        monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+        monkeypatch.setattr(cli_mod, "check_syncthing_installed", lambda: False)
+        monkeypatch.setattr(cli_mod, "run_switch", lambda emu_dir: ("alice", "/path"))
+        monkeypatch.setattr(cli_mod, "setup_systemd_watcher", lambda: (True, "watching"))
+
+    def test_prompts_and_persists_default_on_first_run(self, tmp_path, monkeypatch, capsys):
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+        self._mock_common_setup_deps(monkeypatch, tmp_path)
+
+        cli_mod.main()
+
+        from emu_stitch.config import get_backup_retention, is_configured
+        assert is_configured() is True
+        assert get_backup_retention() == 3
+        out = capsys.readouterr().out
+        assert "Backup retention set to:" in out
+        assert "3 (0 = keep forever)" in out
+
+    def test_skips_prompt_and_keeps_existing_value_when_already_configured(self, tmp_path, monkeypatch, capsys):
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+        from emu_stitch.config import set_backup_retention
+        set_backup_retention(7)
+
+        self._mock_common_setup_deps(monkeypatch, tmp_path)
+
+        cli_mod.main()
+
+        from emu_stitch.config import get_backup_retention
+        assert get_backup_retention() == 7
+        out = capsys.readouterr().out
+        assert "Backup retention:" in out
+        assert "already configured" in out

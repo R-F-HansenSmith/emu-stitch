@@ -9,6 +9,7 @@ import sys
 import logging
 import argparse
 from .config import DEFAULT_BACKUP_RETENTION, is_configured, set_backup_retention
+from . import __version__
 from .detector import detect_emulation_dir, detect_active_steam_user
 from .switcher import run_switch, setup_systemd_watcher, list_profiles
 from .fstab import audit_mount_permissions
@@ -338,6 +339,7 @@ def main():
         description="emu-stitch: Open-Source Multi-User Emulator Save Synchronizer"
     )
     parser.add_argument("--dir", help="Custom EmuDeck directory path")
+    parser.add_argument("--version", action="version", version=f"emu-stitch {__version__}")
 
     subparsers = parser.add_subparsers(dest="command")
     

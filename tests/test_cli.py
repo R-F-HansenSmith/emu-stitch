@@ -8,6 +8,17 @@ import pytest
 import emu_stitch.cli as cli_mod
 
 
+def test_cli_version_flag_prints_version_and_exits_cleanly(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "--version"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_mod.main()
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "emu-stitch" in out
+
+
 def test_main_reports_unexpected_errors_cleanly_instead_of_crashing(monkeypatch, capsys):
     """An unexpected exception from a command handler must produce a clean
     error message and exit(1), not a raw traceback to the end user."""

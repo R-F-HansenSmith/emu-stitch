@@ -3,12 +3,26 @@ set -e
 
 echo "=== Installing emu-stitch CLI ==="
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 is required but was not found in PATH." >&2
+    exit 1
+fi
+
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'; then
+    echo "Error: Python 3.8+ is required (found $(python3 --version 2>&1))." >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 BIN_DIR="$HOME/.local/bin"
 PKG_DIR="$HOME/.local/share/emu-stitch"
 
 mkdir -p "$BIN_DIR"
 mkdir -p "$PKG_DIR"
+
+# Remove any previously installed package files first, so files removed
+# between versions don't linger alongside the new copy.
+rm -rf "$PKG_DIR/emu_stitch"
 
 # Copy emu_stitch Python package to ~/.local/share/emu-stitch
 cp -r "$SCRIPT_DIR/emu_stitch" "$PKG_DIR/"

@@ -184,42 +184,46 @@ def test_is_flatpak_installed_passes_a_timeout_and_survives_a_hang(monkeypatch):
     assert captured["timeout"] is not None
 
 
-def test_audit_emulator_saves_lists_each_ryujinx_save_id_separately(tmp_path):
-    """Each Ryujinx save-ID folder is a distinct game; they must not be
-    collapsed into a single combined entry."""
+def _write_ryujinx_extra_data(save_dir, title_id: int) -> None:
+    import struct
+    save_dir.mkdir(parents=True)
+    (save_dir / "ExtraData0").write_bytes(struct.pack("<Q", title_id) + b"\x00" * 504)
+
+
+def test_audit_emulator_saves_counts_unique_ryujinx_titles_not_save_folders(tmp_path):
+    """Ryujinx can create multiple save-ID folders for the same title (e.g.
+    one per in-emulator user profile) — the count must reflect distinct
+    games, not raw save folders, and must not guess a game name."""
     active_link = tmp_path / "profile"
     ryu_saves = active_link / "ryujinx" / "saves"
-    for i in range(1, 4):
-        save_dir = ryu_saves / f"000000000000000{i}"
-        save_dir.mkdir(parents=True)
-    # Only save ID 1 matches the Super Mario Odyssey heuristic.
-    odyssey_slot = ryu_saves / "0000000000000001" / "0"
-    odyssey_slot.mkdir()
-    (odyssey_slot / "File1.bin").write_bytes(b"save")
+    # Two save folders for the same game (Odyssey's real title ID) plus one
+    # for a different game: 3 save folders, 2 unique games.
+    _write_ryujinx_extra_data(ryu_saves / "0000000000000001", 0x0100000000010000)
+    _write_ryujinx_extra_data(ryu_saves / "0000000000000002", 0x0100000000010000)
+    _write_ryujinx_extra_data(ryu_saves / "0000000000000003", 0x01008cf01baac000)
 
     detected = audit_emulator_saves(str(active_link))
     ryu_entries = [d for d in detected if d["emulator"] == "Ryujinx (Switch)"]
 
-    assert len(ryu_entries) == 3
-    assert sum(1 for e in ryu_entries if e["name"] == "Super Mario Odyssey") == 1
-    assert sum(1 for e in ryu_entries if e["name"] == "Switch Game Save Data") == 2
+    assert len(ryu_entries) == 1
+    assert ryu_entries[0]["count"] == 2
+    assert "Odyssey" not in ryu_entries[0]["name"]
+    assert "2" in ryu_entries[0]["name"]
 
 
-def test_audit_emulator_saves_detects_cemu_titles_under_digital_prefix(tmp_path):
-    """Wii U eShop/digital titles live under the 00050010 title-ID prefix,
-    not just 00050000 (disc titles) — both must be detected."""
+def test_audit_emulator_saves_only_counts_cemu_game_category_not_system_apps(tmp_path):
+    """Wii U system applications (Mii Maker, Health & Safety Info, etc.) live
+    under the 00050010 title-ID prefix and must not be counted as games —
+    only the 00050000 (Game) category counts."""
     active_link = tmp_path / "profile"
     cemu_saves = active_link / "Cemu" / "saves"
-    (cemu_saves / "00050010" / "1004a000").mkdir(parents=True)
-    (cemu_saves / "00050010" / "1004a100").mkdir(parents=True)
-    (cemu_saves / "00050000" / "101c9500").mkdir(parents=True)  # known BOTW EU title
+    (cemu_saves / "00050010" / "1004a000").mkdir(parents=True)  # system app
+    (cemu_saves / "00050010" / "1004a100").mkdir(parents=True)  # system app
+    (cemu_saves / "00050000" / "101c9500").mkdir(parents=True)  # real game (BOTW)
     (cemu_saves / "system" / "pdm").mkdir(parents=True)
 
     detected = audit_emulator_saves(str(active_link))
     cemu_entries = [d for d in detected if d["emulator"] == "Cemu (Wii U)"]
-    cemu_details = {e["details"] for e in cemu_entries}
 
-    assert len(cemu_entries) == 3
-    assert "Save folder: 00050010/1004a000" in cemu_details
-    assert "Save folder: 00050010/1004a100" in cemu_details
-    assert not any("system" in d for d in cemu_details)
+    assert len(cemu_entries) == 1
+    assert cemu_entries[0]["count"] == 1

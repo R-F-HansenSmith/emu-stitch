@@ -6,21 +6,17 @@ conditional save symlinking, anti-loop safeguards, save payload mirroring, and s
 from __future__ import annotations
 
 import os
-import re
 import shutil
+import struct
 import subprocess
 import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-KNOWN_TITLE_MAP: Dict[str, str] = {
-    "00050000/101c9400": "The Legend of Zelda: Breath of the Wild (US)",
-    "00050000/101c9500": "The Legend of Zelda: Breath of the Wild (EU)",
-    "00050000/101c9300": "The Legend of Zelda: Breath of the Wild (JP)",
-}
-
-# Wii U title IDs are 8 hex digits starting with 0005 (e.g. 00050000 for disc
-# titles, 00050010 for eShop/digital titles, 0005000e for DLC).
-CEMU_TITLE_ID_RE = re.compile(r'^0005[0-9a-fA-F]{4}$')
+# Wii U title-ID high half for the "Game" category (retail/eShop base games).
+# Other categories under 0005xxxx exist (0005000c DLC, 0005000e Update,
+# 00050010 System Applications like Mii Maker / Health & Safety Info) but
+# only 00050000 represents an actual installed game with its own save data.
+CEMU_GAME_CATEGORY = "00050000"
 
 
 def is_flatpak_installed(app_id: str) -> bool:
@@ -127,6 +123,23 @@ def configure_cemu_symlinks(emu_dir: str, active_link: str) -> None:
         _safe_replace_with_symlink(link_path, expected_cemu_target)
 
 
+def _read_ryujinx_save_title_id(save_dir: str) -> Optional[int]:
+    """Read the 8-byte little-endian Title ID from a Ryujinx save's
+    ExtraData file (the Nintendo Switch save-data extra-info struct)."""
+    for fname in ("ExtraData0", "ExtraData1"):
+        path = os.path.join(save_dir, fname)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "rb") as f:
+                header = f.read(8)
+        except OSError:
+            continue
+        if len(header) == 8:
+            return struct.unpack("<Q", header)[0]
+    return None
+
+
 def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
     """
     Scans active save profile directory for detected game save data.
@@ -137,42 +150,46 @@ def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
         return detected_saves
 
     # 1. Ryujinx (Nintendo Switch)
+    # A single game can have multiple save-ID folders (e.g. one per
+    # in-emulator user profile), so distinct games are counted by their real
+    # Title ID, not by save folder. There's no local source for game names
+    # (Ryujinx keeps no local title/name cache), so only a count is shown.
     ryu_saves = os.path.join(active_link, "ryujinx", "saves")
     if os.path.exists(ryu_saves):
         save_ids = sorted(
             d for d in os.listdir(ryu_saves)
             if os.path.isdir(os.path.join(ryu_saves, d)) and d.startswith("00000000")
         )
-        for sid in save_ids:
-            has_odyssey = any(
-                os.path.exists(os.path.join(ryu_saves, sid, slot, "File1.bin"))
-                for slot in ["0", "1"]
-            )
-            title = "Super Mario Odyssey" if has_odyssey else "Switch Game Save Data"
+        title_ids = {
+            title_id
+            for sid in save_ids
+            for title_id in [_read_ryujinx_save_title_id(os.path.join(ryu_saves, sid))]
+            if title_id is not None
+        }
+        if title_ids:
+            count = len(title_ids)
             detected_saves.append({
                 "emulator": "Ryujinx (Switch)",
-                "name": title,
-                "details": f"Save ID: {sid}"
+                "name": f"{count} game{'s' if count != 1 else ''} tracked",
+                "details": f"{count} unique title(s) across {len(save_ids)} save record(s)",
+                "count": count,
             })
 
     # 2. Cemu (Wii U)
-    cemu_saves = os.path.join(active_link, "Cemu", "saves")
-    if os.path.exists(cemu_saves):
-        for root, dirs, files in os.walk(cemu_saves):
-            rel_path = os.path.relpath(root, cemu_saves)
-            if rel_path in KNOWN_TITLE_MAP:
-                detected_saves.append({
-                    "emulator": "Cemu (Wii U)",
-                    "name": KNOWN_TITLE_MAP[rel_path],
-                    "details": f"Save folder: {rel_path}"
-                })
-            elif len(rel_path.split(os.sep)) == 2 and CEMU_TITLE_ID_RE.match(rel_path.split(os.sep)[0]):
-                if not any(s["details"].endswith(rel_path) for s in detected_saves):
-                    detected_saves.append({
-                        "emulator": "Cemu (Wii U)",
-                        "name": f"Wii U Title ({rel_path})",
-                        "details": f"Save folder: {rel_path}"
-                    })
+    # Only the 00050000 (Game) title-ID category is an actual installed
+    # game; other 0005xxxx categories are DLC/updates/system applications
+    # that share the base game's save or aren't games at all.
+    cemu_saves = os.path.join(active_link, "Cemu", "saves", CEMU_GAME_CATEGORY)
+    if os.path.isdir(cemu_saves):
+        game_ids = [d for d in os.listdir(cemu_saves) if os.path.isdir(os.path.join(cemu_saves, d))]
+        if game_ids:
+            count = len(game_ids)
+            detected_saves.append({
+                "emulator": "Cemu (Wii U)",
+                "name": f"{count} game{'s' if count != 1 else ''} tracked",
+                "details": f"{count} title(s) under the Game category",
+                "count": count,
+            })
 
     # 3. RetroArch / General Save Files (.srm, .sav, .state)
     # NOTE: RetroArch saves are detected and reported here but are NOT automatically

@@ -280,9 +280,18 @@ def main():
 
     if not args.command:
         print_banner()
-        cmd_switch(args)
+        func = cmd_switch
     else:
-        args.func(args)
+        func = args.func
+
+    try:
+        func(args)
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}Interrupted.{RESET}")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\n{YELLOW}Error:{RESET} {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

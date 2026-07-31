@@ -116,10 +116,7 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
    /home/user/Emulation
    ✔ Internal Storage (/home) - exec permissions active
 
-2. Active Steam User Profile ───────────────────
-   alice  (ID3: 123456789)
-
-3. Save Profiles (2 known) ─────────────────────
+2. Save Profiles (2 known) ─────────────────────
    ╭───────┬───────────┬────────┬─────────┬──────╮
    │ NAME  │ STEAM ID3 │ ACTIVE │ RYUJINX │ CEMU │
    ├───────┼───────────┼────────┼─────────┼──────┤
@@ -127,16 +124,16 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
    │ bob   │ 987654321 │        │       1 │    0 │
    ╰───────┴───────────┴────────┴─────────┴──────╯
 
-4. Detected System Emulators ───────────────────
+3. Detected System Emulators ───────────────────
    • Ryujinx (Switch) INSTALLED -> Symlink routing active
    • Cemu (Wii U) NOT INSTALLED -> Symlink routing skipped
 
-5. Save Games & Profile Sync Status ────────────
+4. Save Games & Profile Sync Status ────────────
    100% IN SYNC — All files synced (142.3 MB across 87 files)
    • 3 games tracked Ryujinx (Switch)
      3 unique title(s) across 3 save record(s)
 
-6. Syncthing & Paired Devices ──────────────────
+5. Syncthing & Paired Devices ──────────────────
    Device ID: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX
 
    Paired Remote Devices (1 paired):
@@ -145,8 +142,12 @@ emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
    ├──────────────────┼────────┼─────────────────────┤
    │ deck-living-room │ ONLINE │ 192.168.1.42:22000  │
    ╰──────────────────┴────────┴─────────────────────╯
-     ID: YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY
+
+   Device IDs:
+     deck-living-room  YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY-YYYYYYY
 ```
+
+If Steam is logged in as a different account than the one currently active (e.g. you switched users but `emu-stitch switch` hasn't run yet), section 2 prints a warning instead of silently showing stale data.
 
 ---
 
@@ -207,7 +208,7 @@ emu-stitch uses [Syncthing](https://syncthing.net/) to sync saves between machin
 
 1. Install Syncthing on both machines
 2. Run `emu-stitch setup` on each machine to register save folders
-3. Find the Device ID on machine B: `emu-stitch audit` (shown in section 6)
+3. Find the Device ID on machine B: `emu-stitch audit` (shown in section 5)
 4. On machine A, pair with machine B:
    ```bash
    emu-stitch pair <MACHINE-B-DEVICE-ID>

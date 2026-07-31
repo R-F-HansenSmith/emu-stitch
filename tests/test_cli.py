@@ -175,6 +175,44 @@ def test_cli_audit_prints_full_paired_device_id(tmp_path, monkeypatch, capsys):
     assert full_device_id in capsys.readouterr().out
 
 
+def test_cli_audit_device_ids_are_explicitly_labeled_by_name(tmp_path, monkeypatch, capsys):
+    """Each device's full ID must be paired with its name explicitly (not
+    left to positional/row-order inference), since IDs are too long to fit
+    as a table column."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
+    monkeypatch.setattr(cli_mod, "audit_mount_permissions", lambda d: (False, "/home", "ok"))
+    monkeypatch.setattr(cli_mod, "detect_active_steam_user", lambda: (None, None))
+    monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+    monkeypatch.setattr(cli_mod, "get_profile_sync_status", lambda p: ("UNKNOWN", "n/a"))
+    monkeypatch.setattr(cli_mod, "audit_emulator_saves", lambda p: [])
+    monkeypatch.setattr(cli_mod, "ensure_syncthing_service", lambda enable=False: (True, "running"))
+    monkeypatch.setattr(cli_mod, "get_syncthing_credentials", lambda: ("apikey", "SELF-ID"))
+    monkeypatch.setattr(
+        cli_mod, "get_paired_devices_status",
+        lambda: [
+            {"id": "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA", "name": "alpha", "connected": True, "address": "10.0.0.1"},
+            {"id": "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB", "name": "beta", "connected": False, "address": "offline"},
+        ],
+    )
+
+    cli_mod.main()
+
+    out = capsys.readouterr().out
+    assert "Device IDs:" in out
+
+    legend = out.split("Device IDs:")[1]
+    alpha_line = next(l for l in legend.splitlines() if "alpha" in l)
+    beta_line = next(l for l in legend.splitlines() if "beta" in l)
+    assert "AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA" in alpha_line
+    assert "BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB-BBBBBBB" in beta_line
+    assert "BBBBBBB" not in alpha_line
+    assert "AAAAAAA" not in beta_line
+
+
 def test_cli_audit_lists_all_profiles_with_per_profile_game_counts(tmp_path, monkeypatch, capsys):
     """The Save Profiles section must list every known profile (not just the
     active one), marking which is active, with its own game counts —
@@ -213,9 +251,6 @@ def test_cli_audit_lists_all_profiles_with_per_profile_game_counts(tmp_path, mon
     out = capsys.readouterr().out
     assert "Save Profiles (2 known)" in out
 
-    # Isolate the Save Profiles table specifically, since section 2's
-    # unrelated "Active Steam User Profile: alice (ID3: 123)" line also
-    # contains "alice" and "123".
     profiles_section = out.split("Save Profiles")[1].split("Detected System Emulators")[0]
     lines = profiles_section.splitlines()
 
@@ -230,6 +265,68 @@ def test_cli_audit_lists_all_profiles_with_per_profile_game_counts(tmp_path, mon
     assert "-" in bob_row  # no known steamid3
     assert "2" in bob_row  # ryujinx count
     assert "0" in bob_row  # cemu count
+
+
+def _mock_audit_deps(monkeypatch, cli_mod, emu_dir, active_steamid, profiles):
+    monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
+    monkeypatch.setattr(cli_mod, "audit_mount_permissions", lambda d: (False, "/home", "ok"))
+    monkeypatch.setattr(cli_mod, "detect_active_steam_user", lambda: (active_steamid, "alice"))
+    monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+    monkeypatch.setattr(cli_mod, "get_profile_sync_status", lambda p: ("UNKNOWN", "n/a"))
+    monkeypatch.setattr(cli_mod, "ensure_syncthing_service", lambda enable=False: (False, "not running"))
+    monkeypatch.setattr(cli_mod, "list_profiles", lambda emu_dir: profiles)
+    monkeypatch.setattr(cli_mod, "audit_emulator_saves", lambda path: [])
+
+
+def test_cli_audit_warns_when_steam_user_diverges_from_active_profile(tmp_path, monkeypatch, capsys):
+    """If Steam is logged in as a different user than the one emu-stitch last
+    switched to (e.g. switch hasn't run yet since an account change), that
+    must be surfaced as an actionable warning."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    _mock_audit_deps(
+        monkeypatch, cli_mod, emu_dir, active_steamid="999",
+        profiles=[{"name": "alice", "path": "/profiles/alice", "active": True, "steamid3": "123"}],
+    )
+
+    cli_mod.main()
+
+    out = capsys.readouterr().out
+    assert "Steam is currently logged in as 'alice'" in out
+    assert "isn't the active save profile" in out
+
+
+def test_cli_audit_does_not_warn_when_steam_user_matches_active_profile(tmp_path, monkeypatch, capsys):
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    _mock_audit_deps(
+        monkeypatch, cli_mod, emu_dir, active_steamid="123",
+        profiles=[{"name": "alice", "path": "/profiles/alice", "active": True, "steamid3": "123"}],
+    )
+
+    cli_mod.main()
+
+    out = capsys.readouterr().out
+    assert "isn't the active save profile" not in out
+
+
+def test_cli_audit_does_not_warn_when_steam_detection_fails(tmp_path, monkeypatch, capsys):
+    """A failed Steam-user detection (steamid3=None) must not be mistaken
+    for a real divergence from the active profile."""
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    _mock_audit_deps(
+        monkeypatch, cli_mod, emu_dir, active_steamid=None,
+        profiles=[{"name": "Default_User", "path": "/profiles/default", "active": True, "steamid3": None}],
+    )
+
+    cli_mod.main()
+
+    out = capsys.readouterr().out
+    assert "isn't the active save profile" not in out
 
 
 def test_cli_audit_omits_steamid_note_for_unmapped_profile(tmp_path, monkeypatch, capsys):

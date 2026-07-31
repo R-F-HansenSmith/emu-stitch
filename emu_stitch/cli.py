@@ -310,14 +310,10 @@ def cmd_audit(args):
     else:
         cprint(f"   [green]✔ {esc(msg)}[/]")
 
-    # 2. Active Steam User Profile
+    # 2. Save Profiles
     s_id, account_name = detect_active_steam_user()
-    print_section_header(2, "Active Steam User Profile")
-    cprint(f"   [bold]{esc(str(account_name))}[/]  (ID3: {esc(str(s_id))})")
-
-    # 3. Save Profiles
     profiles = list_profiles(emu_dir)
-    print_section_header(3, f"Save Profiles ({len(profiles)} known)")
+    print_section_header(2, f"Save Profiles ({len(profiles)} known)")
     if not profiles:
         print_warning("No save profiles found yet. Run 'emu-stitch switch' to create one.")
     else:
@@ -327,7 +323,10 @@ def cmd_audit(args):
         table.add_column("ACTIVE", justify="center")
         table.add_column("RYUJINX", justify="right")
         table.add_column("CEMU", justify="right")
+        active_profile = None
         for p in profiles:
+            if p["active"]:
+                active_profile = p
             profile_games = audit_emulator_saves(p["path"])
             ryu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Ryujinx")), 0)
             cemu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Cemu")), 0)
@@ -340,21 +339,31 @@ def cmd_audit(args):
             )
         console.print(table)
 
-    # 4. Detected System Emulators
+        # Steam's currently-logged-in user can diverge from the profile
+        # emu-stitch last actually switched to (e.g. the Steam account
+        # changed but 'emu-stitch switch' hasn't run yet) — surface that
+        # instead of just repeating the same "active profile" info twice.
+        if s_id and (active_profile is None or active_profile.get("steamid3") != s_id):
+            print_warning(
+                f"Steam is currently logged in as '{account_name}' (ID3: {s_id}), but that "
+                "isn't the active save profile. Run 'emu-stitch switch' to fix this."
+            )
+
+    # 3. Detected System Emulators
     installed_emu = detect_installed_emulators()
-    print_section_header(4, "Detected System Emulators")
+    print_section_header(3, "Detected System Emulators")
     for emu_key, emu_name in [("ryujinx", "Ryujinx (Switch)"), ("cemu", "Cemu (Wii U)")]:
         if installed_emu.get(emu_key):
             cprint(f"   • [bold]{esc(emu_name)}[/] [green]INSTALLED[/] -> Symlink routing active")
         else:
             cprint(f"   • [bold]{esc(emu_name)}[/] [yellow]NOT INSTALLED[/] -> Symlink routing skipped")
 
-    # 5. Save Games & Profile Sync Status
+    # 4. Save Games & Profile Sync Status
     real_profile_path = os.readlink(active_link) if os.path.islink(active_link) else active_link
     sync_status, sync_msg = get_profile_sync_status(real_profile_path)
     status_style = "green" if "100%" in sync_status else "yellow"
 
-    print_section_header(5, "Save Games & Profile Sync Status")
+    print_section_header(4, "Save Games & Profile Sync Status")
     cprint(f"   [{status_style}]{esc(sync_status)}[/] — {esc(sync_msg)}")
 
     detected_games = audit_emulator_saves(active_link)
@@ -367,10 +376,10 @@ def cmd_audit(args):
             if "RetroArch" in g["emulator"]:
                 cprint("     [yellow]Note: RetroArch saves are detected but not auto-routed. See README for setup.[/]")
 
-    # 6. Syncthing & Device Audit
+    # 5. Syncthing & Device Audit
     st_ok, st_msg = ensure_syncthing_service(enable=False)
     if st_ok:
-        print_section_header(6, "Syncthing & Paired Devices")
+        print_section_header(5, "Syncthing & Paired Devices")
         api_key, dev_id = get_syncthing_credentials()
         if dev_id:
             cprint(f"   Device ID: [bold]{esc(dev_id)}[/]")
@@ -387,10 +396,17 @@ def cmd_audit(args):
             for d in devices:
                 table.add_row(d["name"], "ONLINE" if d["connected"] else "OFFLINE", d["address"])
             console.print(table)
+
+            # Full IDs are too long to fit as a table column without either
+            # truncating them or blowing out the table width, so they're
+            # listed separately below — explicitly labeled by device name
+            # rather than left to positional order.
+            name_width = max(len(d["name"]) for d in devices)
+            cprint("\n   [bold]Device IDs:[/]")
             for d in devices:
-                cprint(f"     ID: {esc(d['id'])}")
+                cprint(f"     {esc(d['name'].ljust(name_width))}  [dim]{esc(d['id'])}[/]")
     else:
-        print_section_header(6, "Syncthing Status")
+        print_section_header(5, "Syncthing Status")
         cprint(f"   {esc(st_msg)}")
 
 def main():

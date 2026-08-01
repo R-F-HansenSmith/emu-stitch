@@ -217,6 +217,10 @@ emu-stitch uses [Syncthing](https://syncthing.net/) to sync saves between machin
 
 Each user's profile is registered as a separate Syncthing folder (`emustitch-<username>`), so alice and bob's saves sync independently.
 
+**A note on availability:** Syncthing only transfers files while both devices are online and connected to each other — there's no store-and-forward relay of your actual data. If your handheld syncs a save while your desktop is asleep, that save just waits until both are online at the same time again.
+
+If you want saves to always be up to date regardless of whether your other devices are awake, add a third, always-on Syncthing instance (e.g. a small home server or VM) as a hub: pair it with each of your machines and share the same `emustitch-<username>` folders with it. Each machine then only needs to be online at the same time as the always-on hub, not at the same time as each other.
+
 ---
 
 ## Environment Variables

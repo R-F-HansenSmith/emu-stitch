@@ -528,7 +528,7 @@ def cmd_ryujinx_reindex(args):
         backup = apply_reindex(ryujinx_dir, plan)
         print_success(f"Save index rebuilt. Previous index backed up to: {backup}")
         remaining = check_save_index(profile_dir, ryujinx_dir)
-        if any(remaining.values()):
+        if any(remaining[k] for k in PROBLEM_KEYS):
             print_warning("Some save folders still can't be indexed; see the notes above.")
 
     if not get_ryujinx_auto_reindex():

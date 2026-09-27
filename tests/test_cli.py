@@ -619,3 +619,19 @@ class TestRyujinxReindexCommand:
         monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "--auto", "off"])
         cli_mod.main()
         assert get_ryujinx_auto_reindex() is False
+
+
+def test_reindex_does_not_warn_about_unused_duplicates(tmp_path, monkeypatch, capsys):
+    """Leftover duplicate folders are expected after a rebuild and must not
+    trigger the "can't be indexed" warning."""
+    from emu_stitch.ryujinx import ReindexPlan
+    TestRyujinxReindexCommand()._setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: ReindexPlan([], 1, changes=["x: add"]))
+    monkeypatch.setattr(cli_mod, "check_save_index", lambda *a: {
+        "mismatched": [], "orphaned": [], "reusable": [], "duplicates": ["0003 is unused"],
+    })
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "-y"])
+
+    cli_mod.main()
+
+    assert "can't be indexed" not in capsys.readouterr().out

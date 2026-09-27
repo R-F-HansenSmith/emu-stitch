@@ -19,6 +19,8 @@
 - New: if both machines added Ryujinx saves while apart, the two copies of the index are merged automatically; a game started on both machines uses the most recently played save, and the other copy is kept.
 - New: `audit` checks the active profile against its Ryujinx save index and lists unused duplicate saves. `emu-stitch ryujinx-reindex` repairs a profile's index from its own save folders (for saves from before this version).
 - `switch` no longer touches Ryujinx's saves or index while Ryujinx is running.
+- Profiles created after `setup` are now registered with Syncthing on their first `switch` and shared with the same devices as existing profiles (if sync was enabled in `setup`). Previously only the profile active during `setup` was ever synced.
+- `audit` counts Ryujinx saves in every numbering range.
 - The watcher also runs `switch` when Ryujinx saves arrive from another machine, and passes the Emulation directory explicitly. `setup` updates an older watcher.
 
 ### Fixes

@@ -16,8 +16,9 @@ from typing import Dict, List, Optional, Tuple
 
 from .backups import migrate_to_backup
 from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name, steam_root
+from .config import get_syncthing_sync_profiles
 from .emulators import configure_all_emulators
-from .syncthing import generate_stignore
+from .syncthing import generate_stignore, share_profile_folder
 
 
 def _atomic_write_json(path: str, data: Dict[str, str]) -> None:
@@ -126,6 +127,14 @@ def _run_switch_locked(emu_dir: str, saves_base: str) -> Tuple[str, str]:
     # Route emulators & mirror save payloads
     for msg in configure_all_emulators(emu_dir, active_link, profile_name) or []:
         print(msg)
+
+    # Profiles created after setup get synced like the rest (only if the
+    # user opted in to Syncthing in setup). Syncthing may not be up yet at
+    # login; the next switch simply tries again.
+    if get_syncthing_sync_profiles():
+        ok, msg = share_profile_folder(profile_name, real_target)
+        if not ok or "shared with" in msg or "auto-registered" in msg:
+            print(f"Syncthing: {msg}")
 
     return profile_name, real_target
 

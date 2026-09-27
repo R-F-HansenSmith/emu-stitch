@@ -370,3 +370,20 @@ def test_watcher_status_detects_missing_outdated_and_current(tmp_path, monkeypat
     setup_systemd_watcher("/e")
     assert watcher_status("/e") == "current"
     assert watcher_status("/other/Emulation") == "outdated"
+
+
+def test_switch_shares_new_profiles_only_when_opted_in(tmp_path, fake_steam_user, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(switcher_mod, "share_profile_folder",
+                        lambda name, path: calls.append(name) or (True, f"Successfully auto-registered Syncthing folder for '{name}'"))
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    run_switch(str(emu_dir))
+    assert calls == []
+
+    from emu_stitch.config import set_syncthing_sync_profiles
+    set_syncthing_sync_profiles(True)
+    run_switch(str(emu_dir))
+    assert calls == ["TestUser"]
+    assert "Syncthing: Successfully auto-registered" in capsys.readouterr().out

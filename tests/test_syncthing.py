@@ -587,3 +587,41 @@ class TestGetPairedDevicesStatus:
         devices = get_paired_devices_status()
 
         assert devices[0]["address"] == "offline"
+
+
+# ---------------------------------------------------------------------------
+# share_profile_folder
+# ---------------------------------------------------------------------------
+
+class TestShareProfileFolder:
+    def test_new_profile_is_shared_with_devices_of_existing_profiles(self, tmp_path, fake_st):
+        from emu_stitch.syncthing import share_profile_folder
+        fake_st.my_id = "SELF"
+        fake_st.folders = [
+            {"id": "emustitch-alice", "path": "/a", "devices": [{"deviceID": "SELF"}, {"deviceID": "HUB"}, {"deviceID": "DESK"}]},
+            {"id": "personal", "path": "/p", "devices": [{"deviceID": "PHONE"}]},
+        ]
+
+        ok, msg = share_profile_folder("bob", str(tmp_path / "bob"))
+
+        assert ok is True
+        bob = next(f for f in fake_st.folders if f["id"] == "emustitch-bob")
+        assert sorted(d["deviceID"] for d in bob["devices"]) == ["DESK", "HUB"]
+        assert "shared with 2" in msg
+
+    def test_is_idempotent(self, tmp_path, fake_st):
+        from emu_stitch.syncthing import share_profile_folder
+        fake_st.folders = [{"id": "emustitch-alice", "path": "/a", "devices": [{"deviceID": "HUB"}]}]
+        share_profile_folder("bob", str(tmp_path / "bob"))
+        before = [f.copy() for f in fake_st.folders]
+
+        ok, msg = share_profile_folder("bob", str(tmp_path / "bob"))
+
+        assert ok is True
+        assert "shared with" not in msg
+        assert fake_st.folders == before
+
+    def test_no_api_key_reports_failure(self, no_api_key):
+        from emu_stitch.syncthing import share_profile_folder
+        ok, msg = share_profile_folder("bob", "/x")
+        assert ok is False

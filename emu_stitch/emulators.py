@@ -12,7 +12,14 @@ import subprocess
 from typing import Dict, List, Optional
 
 from .backups import merge_tree, migrate_to_backup
-from .ryujinx import INDEX_SAVE, PROFILE_INDEX, index_present, maintain_profile_index, ryujinx_running
+from .ryujinx import (
+    INDEX_SAVE,
+    PROFILE_INDEX,
+    index_present,
+    maintain_profile_index,
+    ryujinx_running,
+    scan_profile_saves,
+)
 
 # Wii U title-ID high half for the "Game" category (retail/eShop base games).
 # Other categories under 0005xxxx exist (0005000c DLC, 0005000e Update,
@@ -182,26 +189,18 @@ def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
     # in-emulator user profile), so distinct games are counted by their real
     # Title ID, not by save folder. There's no local source for game names
     # (Ryujinx keeps no local title/name cache), so only a count is shown.
-    ryu_saves = os.path.join(active_link, "ryujinx", "saves")
-    if os.path.exists(ryu_saves):
-        save_ids = sorted(
-            d for d in os.listdir(ryu_saves)
-            if os.path.isdir(os.path.join(ryu_saves, d)) and d.startswith("00000000")
-        )
-        title_ids = {
-            title_id
-            for sid in save_ids
-            for title_id in [_read_ryujinx_save_title_id(os.path.join(ryu_saves, sid))]
-            if title_id is not None
-        }
-        if title_ids:
-            count = len(title_ids)
-            detected_saves.append({
-                "emulator": "Ryujinx (Switch)",
-                "name": f"{count} game{'s' if count != 1 else ''} tracked",
-                "details": f"{count} unique title(s) across {len(save_ids)} save record(s)",
-                "count": count,
-            })
+    # Save folder numbers can be in any machine's range (see ryujinx.py), so
+    # use the same scan as the index code rather than matching a prefix.
+    ryu_folders = scan_profile_saves(active_link)
+    title_ids = {struct.unpack_from("<Q", f.key, 0)[0] for f in ryu_folders if f.key is not None}
+    if title_ids:
+        count = len(title_ids)
+        detected_saves.append({
+            "emulator": "Ryujinx (Switch)",
+            "name": f"{count} game{'s' if count != 1 else ''} tracked",
+            "details": f"{count} unique title(s) across {len(ryu_folders)} save record(s)",
+            "count": count,
+        })
 
     # 2. Cemu (Wii U)
     # Only the 00050000 (Game) title-ID category is an actual installed

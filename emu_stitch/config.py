@@ -56,3 +56,14 @@ def set_backup_retention(count: int) -> None:
     config["backup_retention"] = count
     save_config(config)
 
+
+def get_syncthing_sync_profiles() -> bool:
+    """Whether the user opted in (in setup) to syncing save profiles, so
+    `switch` registers and shares new profiles automatically."""
+    return load_config().get("syncthing_sync_profiles") is True
+
+
+def set_syncthing_sync_profiles(enabled: bool) -> None:
+    config = load_config()
+    config["syncthing_sync_profiles"] = enabled
+    save_config(config)

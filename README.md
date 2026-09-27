@@ -105,7 +105,7 @@ Everything is per-user; nothing needs root.
 | Autostart entry | `~/.config/autostart/emu_stitch.desktop` | `setup` (if accepted) |
 | Watcher: runs `switch` when the Steam account changes, or when Ryujinx saves arrive from another machine | `~/.config/systemd/user/emu-stitch-watcher.{path,service}` | `setup` (if accepted) |
 | Syncthing user service enabled | `systemctl --user enable syncthing` | `setup` (if accepted) |
-| Syncthing folders (`emustitch-<name>`) and paired devices | Syncthing's config, via its local REST API | `setup` / `pair` |
+| Syncthing folders (`emustitch-<name>`) and paired devices | Syncthing's config, via its local REST API | `setup` / `pair`, and `switch` for new profiles if sync is enabled |
 | `PATH` entry in your shell startup file | e.g. `~/.bashrc` | `install.sh` (only if needed) |
 
 `./uninstall.sh` removes the command, autostart entry, watcher units and settings. It leaves your saves, backups and Syncthing config alone.
@@ -280,7 +280,7 @@ emu-stitch uses [Syncthing](https://syncthing.net/) to sync saves between machin
 
 If a Syncthing folder for a profile already exists but points at a different path (for example because your Emulation folder moved to an SD card), emu-stitch won't change it. Update the path in Syncthing's web UI yourself, after checking both locations.
 
-Each user's profile is registered as a separate Syncthing folder (`emustitch-<username>`), so alice and bob's saves sync independently.
+Each user's profile is registered as a separate Syncthing folder (`emustitch-<username>`), so alice and bob's saves sync independently. If you enabled sync in `setup`, profiles created later (a new Steam account on the handheld) are registered on their first `switch` and shared with the same devices as your other profiles.
 
 **A note on availability:** Syncthing only transfers files while both devices are online and connected to each other — there's no store-and-forward relay of your actual data. If your handheld syncs a save while your desktop is asleep, that save just waits until both are online at the same time again.
 

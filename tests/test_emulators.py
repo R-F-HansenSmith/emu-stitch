@@ -377,3 +377,18 @@ class TestRyujinxIndexRouting:
         assert "Ryujinx is running" in messages[0]
         assert not (ryu / "bis" / "system" / "save" / "8000000000000000").is_symlink()
         assert not (ryu / "bis" / "user" / "save").exists()
+
+
+def test_audit_counts_saves_numbered_in_a_machine_range(tmp_path):
+    """Save folders are numbered from each machine's own range (e.g.
+    7a0444bb00000001), not just 00000000xxxxxxxx."""
+    active_link = tmp_path / "profile"
+    ryu_saves = active_link / "ryujinx" / "saves"
+    _write_ryujinx_extra_data(ryu_saves / "7a0444bb00000001", 0x0100000000010000)
+    _write_ryujinx_extra_data(ryu_saves / "7a0444bb00000002", 0x01008cf01baac000)
+    _write_ryujinx_extra_data(ryu_saves / "0000000000000003", 0x01008cf01baac000)
+
+    ryu = [d for d in audit_emulator_saves(str(active_link)) if d["emulator"] == "Ryujinx (Switch)"]
+
+    assert ryu[0]["count"] == 2
+    assert "across 3 save record(s)" in ryu[0]["details"]

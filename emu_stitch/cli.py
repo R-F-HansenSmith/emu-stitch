@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_BACKUP_RETENTION,
     is_configured,
     set_backup_retention,
+    set_syncthing_sync_profiles,
 )
 from . import __version__
 from .detector import detect_emulation_dir, detect_active_steam_user
@@ -46,7 +47,7 @@ from .syncthing import (
     check_syncthing_installed,
     ensure_syncthing_service,
     get_syncthing_credentials,
-    auto_add_syncthing_folder,
+    share_profile_folder,
     auto_pair_device,
     remove_paired_device,
     get_paired_devices_status,
@@ -282,7 +283,8 @@ def cmd_setup(args):
             print_warning(f"Syncthing service: {msg}")
 
     if do_syncthing_register:
-        st_ok, st_msg = auto_add_syncthing_folder(profile, path)
+        set_syncthing_sync_profiles(True)
+        st_ok, st_msg = share_profile_folder(profile, path)
         if st_ok:
             print_success(f"Syncthing folder: {st_msg}")
         else:

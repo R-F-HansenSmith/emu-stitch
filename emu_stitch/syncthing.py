@@ -216,6 +216,37 @@ def auto_add_syncthing_folder(profile_name: str, profile_dir: str) -> Result:
         return False, _api_error(e, "registering the folder")
 
 
+def share_profile_folder(profile_name: str, profile_dir: str) -> Result:
+    """
+    Register a profile's folder (auto_add_syncthing_folder) and share it with
+    every device that already shares another emu-stitch folder, so a new
+    profile syncs to the same machines as the existing ones.
+    """
+    ok, msg = auto_add_syncthing_folder(profile_name, profile_dir)
+    if not ok:
+        return ok, msg
+    api = _connect()
+    folder_id = f"{FOLDER_ID_PREFIX}{profile_name.lower()}"
+    try:
+        folders = api.request("GET", "/rest/config/folders") or []
+        me = (api.request("GET", "/rest/system/status") or {}).get("myID")
+        peers = {
+            d["deviceID"]
+            for f in folders if f.get("id", "").startswith(FOLDER_ID_PREFIX) and f.get("id") != folder_id
+            for d in f.get("devices", []) if d.get("deviceID") and d.get("deviceID") != me
+        }
+        folder = next(f for f in folders if f.get("id") == folder_id)
+        current = {d.get("deviceID") for d in folder.get("devices", [])}
+        missing = sorted(peers - current)
+        if missing:
+            api.request("PATCH", f"/rest/config/folders/{_q(folder_id)}",
+                        {"devices": folder.get("devices", []) + [{"deviceID": d} for d in missing]})
+            return True, f"{msg}; shared with {len(missing)} paired device(s)"
+        return True, msg
+    except Exception as e:
+        return False, _api_error(e, "sharing the folder")
+
+
 def get_profile_sync_status(profile_dir: str) -> Tuple[str, str]:
     """
     Query Syncthing REST API for live folder sync status matching profile_dir.

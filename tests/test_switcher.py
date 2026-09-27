@@ -114,8 +114,9 @@ def test_run_switch_prunes_old_backups_beyond_configured_retention(tmp_path, fak
     emu_dir = tmp_path / "Emulation"
     emu_dir.mkdir()
     # Two pre-existing backups from earlier migrations.
-    (emu_dir / "saves.bak-20260101-000000").mkdir()
-    (emu_dir / "saves.bak-20260102-000000").mkdir()
+    for name in ("saves.bak-20260101-000000", "saves.bak-20260102-000000"):
+        (emu_dir / name).mkdir()
+        (emu_dir / name / ".emu-stitch-merged").touch()
     saves_dir = emu_dir / "saves"
     saves_dir.mkdir()
     (saves_dir / "existing.srm").write_text("data")
@@ -264,3 +265,85 @@ class TestListProfiles:
         profiles = list_profiles(str(emu_dir))
 
         assert profiles == []
+
+
+class TestProfileNameSafety:
+    def test_user_map_values_are_resanitized_on_load(self, tmp_path):
+        map_file = tmp_path / "user_map.json"
+        map_file.write_text(json.dumps({"1": "../../etc", "2": "alice"}))
+
+        user_map = switcher_mod.load_user_map(str(map_file))
+
+        assert user_map == {"1": "etc", "2": "alice"}
+
+    def test_malformed_user_map_is_ignored(self, tmp_path):
+        map_file = tmp_path / "user_map.json"
+        map_file.write_text(json.dumps(["not", "a", "dict"]))
+
+        assert switcher_mod.load_user_map(str(map_file)) == {}
+
+    def test_traversal_in_user_map_never_escapes_saves_by_user(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(switcher_mod, "detect_active_steam_user", lambda: ("123", "whoever"))
+        monkeypatch.setattr(switcher_mod, "configure_all_emulators", lambda *a, **k: None)
+        emu_dir = tmp_path / "Emulation"
+        (emu_dir / "saves_by_user").mkdir(parents=True)
+        (emu_dir / "saves_by_user" / "user_map.json").write_text(json.dumps({"123": "../../escaped"}))
+
+        _, target = run_switch(str(emu_dir))
+
+        assert os.path.dirname(target) == str(emu_dir / "saves_by_user")
+
+    def test_colliding_names_from_different_steam_accounts_get_distinct_profiles(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(switcher_mod, "configure_all_emulators", lambda *a, **k: None)
+        emu_dir = tmp_path / "Emulation"
+        emu_dir.mkdir()
+
+        monkeypatch.setattr(switcher_mod, "detect_active_steam_user", lambda: ("1", "Alice"))
+        first, _ = run_switch(str(emu_dir))
+        # Differs only by case: would share the Syncthing folder ID emustitch-alice.
+        monkeypatch.setattr(switcher_mod, "detect_active_steam_user", lambda: ("2", "alice"))
+        second, _ = run_switch(str(emu_dir))
+
+        assert first == "Alice"
+        assert second == "alice_2"
+
+
+def test_run_switch_holds_an_exclusive_lock(tmp_path, fake_steam_user, monkeypatch):
+    import fcntl
+    locked = []
+    monkeypatch.setattr(fcntl, "flock", lambda f, op: locked.append((f.name, op)))
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    run_switch(str(emu_dir))
+
+    assert locked == [(str(emu_dir / "saves_by_user" / ".emu-stitch.lock"), fcntl.LOCK_EX)]
+
+
+def test_setup_systemd_watcher_uses_installed_binary_and_detected_steam_root(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(shutil, "which", lambda name: "/opt/my tools/emu-stitch")
+    flatpak_steam = fake_home / ".var" / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam"
+    (flatpak_steam / "config").mkdir(parents=True)
+    (flatpak_steam / "config" / "loginusers.vdf").write_text("")
+
+    from emu_stitch.switcher import setup_systemd_watcher
+    setup_systemd_watcher()
+
+    units = fake_home / ".config" / "systemd" / "user"
+    assert 'ExecStart="/opt/my tools/emu-stitch" switch' in (units / "emu-stitch-watcher.service").read_text()
+    assert f"PathModified={flatpak_steam}/config/loginusers.vdf" in (units / "emu-stitch-watcher.path").read_text()
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("/home/deck/.local/bin/emu-stitch", "/home/deck/.local/bin/emu-stitch"),
+    ("/home/my user/bin/emu-stitch", '"/home/my user/bin/emu-stitch"'),
+    ("/100%/emu-stitch", "/100%%/emu-stitch"),
+])
+def test_quote_exec_arg(path, expected):
+    assert switcher_mod.quote_exec_arg(path) == expected

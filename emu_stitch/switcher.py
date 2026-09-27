@@ -6,15 +6,16 @@ save symlink repointing, and profile folder isolation.
 from __future__ import annotations
 
 import os
+import re
 import json
+import fcntl
 import shutil
 import logging
-import datetime
+import subprocess
 from typing import Dict, List, Optional, Tuple
 
-from .backups import prune_old_backups
-from .config import get_backup_retention
-from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name
+from .backups import migrate_to_backup
+from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name, steam_root
 from .emulators import configure_all_emulators
 from .syncthing import generate_stignore
 
@@ -29,17 +30,40 @@ def _atomic_write_json(path: str, data: Dict[str, str]) -> None:
 
 
 def load_user_map(map_file: str) -> Dict[str, str]:
-    """Load or initialize generic user profile map JSON."""
+    """Load or initialize generic user profile map JSON.
+
+    Every profile name is re-sanitized on load: the file may have been
+    edited by hand or synced in from another machine, and its values are
+    used as directory names, so they must never contain path separators."""
     if not os.path.exists(map_file):
         initial_map: Dict[str, str] = {}
         _atomic_write_json(map_file, initial_map)
         return initial_map
     try:
         with open(map_file, "r") as f:
-            return json.load(f)
+            raw = json.load(f)
     except Exception as e:
         logging.error(f"Error loading map file: {e}")
         return {}
+    if not isinstance(raw, dict):
+        logging.error(f"Ignoring malformed map file (expected a JSON object): {map_file}")
+        return {}
+    user_map: Dict[str, str] = {}
+    for steamid3, name in raw.items():
+        clean = sanitize_name(str(name), fallback=f"User_{steamid3}")
+        if clean != name:
+            logging.warning(f"Unsafe profile name {name!r} in {map_file}; using {clean!r}")
+        user_map[str(steamid3)] = clean
+    return user_map
+
+
+def _unique_profile_name(user_map: Dict[str, str], name: str, steamid3: str) -> str:
+    """Disambiguate `name` if another Steam account already owns it. The
+    comparison ignores case because Syncthing folder IDs are lowercased."""
+    taken = {v.lower() for k, v in user_map.items() if k != steamid3}
+    if name.lower() in taken:
+        return f"{name}_{steamid3}"
+    return name
 
 
 def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
@@ -48,47 +72,40 @@ def run_switch(emu_dir: Optional[str] = None) -> Tuple[str, str]:
         emu_dir = detect_emulation_dir()
 
     saves_base = os.path.join(emu_dir, "saves_by_user")
+    os.makedirs(saves_base, exist_ok=True)
+
+    # The autostart entry and the systemd watcher can both fire at login;
+    # serialize runs so they never migrate or relink concurrently.
+    with open(os.path.join(saves_base, ".emu-stitch.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _run_switch_locked(emu_dir, saves_base)
+
+
+def _run_switch_locked(emu_dir: str, saves_base: str) -> Tuple[str, str]:
     active_link = os.path.join(emu_dir, "saves")
     map_file = os.path.join(saves_base, "user_map.json")
-
-    os.makedirs(saves_base, exist_ok=True)
     user_map = load_user_map(map_file)
 
     steamid3, persona = detect_active_steam_user()
     if not steamid3:
         profile_name = "Default_User"
         print("Warning: Could not determine active Steam ID. Using 'Default_User'")
+    elif steamid3 in user_map:
+        profile_name = user_map[steamid3]
     else:
-        if steamid3 in user_map:
-            profile_name = user_map[steamid3]
-        elif persona:
-            profile_name = sanitize_name(persona)
-            user_map[steamid3] = profile_name
-            _atomic_write_json(map_file, user_map)
-        else:
-            profile_name = f"User_{steamid3}"
-            user_map[steamid3] = profile_name
-            _atomic_write_json(map_file, user_map)
+        base_name = sanitize_name(persona or "", fallback=f"User_{steamid3}")
+        profile_name = _unique_profile_name(user_map, base_name, steamid3)
+        user_map[steamid3] = profile_name
+        _atomic_write_json(map_file, user_map)
 
     target_profile_dir = os.path.join(saves_base, profile_name)
     os.makedirs(target_profile_dir, exist_ok=True)
     generate_stignore(target_profile_dir)
 
-    # Initial setup migration if saves is still a real directory.
-    # Merge contents into the new profile dir (destination wins), then rename
-    # the original to a timestamped backup — never delete it.
+    # Initial setup migration if saves is still a real directory: merge it
+    # into the profile and keep the original as a backup — never delete it.
     if os.path.exists(active_link) and not os.path.islink(active_link):
-        for item in os.listdir(active_link):
-            src = os.path.join(active_link, item)
-            dst = os.path.join(target_profile_dir, item)
-            if not os.path.exists(dst):
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst, symlinks=True)
-                else:
-                    shutil.copy2(src, dst)
-        backup_path = active_link + ".bak-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        os.rename(active_link, backup_path)
-        prune_old_backups(active_link, get_backup_retention())
+        migrate_to_backup(active_link, target_profile_dir)
 
     # Atomic symlink update: build the new symlink at a temp path, then
     # os.replace() it into place. This is atomic on POSIX and avoids any
@@ -144,6 +161,27 @@ def list_profiles(emu_dir: Optional[str] = None) -> List[Dict[str, object]]:
     return profiles
 
 
+def emu_stitch_executable() -> str:
+    """Absolute path of the installed emu-stitch command. uv's tool bin
+    directory is configurable (UV_TOOL_BIN_DIR, XDG_BIN_HOME), so look it up
+    on PATH rather than assuming ~/.local/bin."""
+    return shutil.which("emu-stitch") or os.path.expanduser("~/.local/bin/emu-stitch")
+
+
+def quote_exec_arg(arg: str) -> str:
+    """Quote a path for a systemd ExecStart= or .desktop Exec= line. Both
+    accept double-quoted arguments with backslash escapes and treat `%` as
+    a specifier, so the same escaping works for either."""
+    arg = arg.replace("%", "%%")
+    if re.fullmatch(r"[A-Za-z0-9_./+%-]+", arg):
+        return arg
+    return '"' + re.sub(r'(["`$\\])', r"\\\1", arg) + '"'
+
+
+def watcher_installed() -> bool:
+    return os.path.exists(os.path.expanduser("~/.config/systemd/user/emu-stitch-watcher.path"))
+
+
 def setup_systemd_watcher() -> Tuple[bool, str]:
     """Create and enable a systemd user path unit to watch loginusers.vdf for instant profile switching."""
     user_systemd_dir = os.path.expanduser("~/.config/systemd/user")
@@ -151,13 +189,14 @@ def setup_systemd_watcher() -> Tuple[bool, str]:
 
     path_unit = os.path.join(user_systemd_dir, "emu-stitch-watcher.path")
     service_unit = os.path.join(user_systemd_dir, "emu-stitch-watcher.service")
-    wrapper_bin = os.path.expanduser("~/.local/bin/emu-stitch")
+    exec_bin = quote_exec_arg(emu_stitch_executable())
+    loginusers_vdf = os.path.join(steam_root(), "config", "loginusers.vdf").replace("%", "%%")
 
     path_content = (
         "[Unit]\n"
         "Description=Watch Steam loginusers.vdf for active user changes\n\n"
         "[Path]\n"
-        "PathModified=%h/.local/share/Steam/config/loginusers.vdf\n"
+        f"PathModified={loginusers_vdf}\n"
         "Unit=emu-stitch-watcher.service\n\n"
         "[Install]\n"
         "WantedBy=default.target\n"
@@ -168,11 +207,10 @@ def setup_systemd_watcher() -> Tuple[bool, str]:
         "Description=emu-stitch automatic save profile switcher\n\n"
         "[Service]\n"
         "Type=oneshot\n"
-        f"ExecStart={wrapper_bin} switch\n"
+        f"ExecStart={exec_bin} switch\n"
     )
 
     try:
-        import subprocess
         with open(path_unit, "w") as f:
             f.write(path_content)
         with open(service_unit, "w") as f:

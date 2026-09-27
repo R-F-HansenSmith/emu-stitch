@@ -46,6 +46,7 @@ def test_safe_replace_prunes_old_backups_beyond_configured_retention(tmp_path, m
 
     link_path = tmp_path / "bis_user_save"
     (tmp_path / "bis_user_save.bak-20260101-000000").mkdir()
+    (tmp_path / "bis_user_save.bak-20260101-000000" / ".emu-stitch-merged").touch()
     link_path.mkdir()
     (link_path / "File1.bin").write_bytes(b"precious save data")
 
@@ -248,3 +249,99 @@ def test_audit_emulator_saves_only_counts_cemu_game_category_not_system_apps(tmp
 
     assert len(cemu_entries) == 1
     assert cemu_entries[0]["count"] == 1
+
+
+def test_flatpak_ryujinx_is_routed_inside_its_sandbox_not_native_config(tmp_path, monkeypatch):
+    """A Flatpak-only Ryujinx never reads ~/.config/Ryujinx, so routing must
+    target its ~/.var/app copy and must not create the native directory."""
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(emulators_mod, "is_flatpak_installed", lambda app_id: app_id == "org.ryujinx.Ryujinx")
+    active_link = tmp_path / "Emulation" / "saves"
+    active_link.mkdir(parents=True)
+
+    emulators_mod.configure_all_emulators(str(tmp_path / "Emulation"), str(active_link), "alice")
+
+    flatpak_save = tmp_path / ".var" / "app" / "org.ryujinx.Ryujinx" / "config" / "Ryujinx" / "bis" / "user" / "save"
+    assert flatpak_save.is_symlink()
+    assert not (tmp_path / ".config" / "Ryujinx").exists()
+
+
+def test_flatpak_cemu_save_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setattr(emulators_mod, "is_flatpak_installed", lambda app_id: app_id == "info.cemu.Cemu")
+
+    assert emulators_mod.cemu_save_paths() == [
+        str(tmp_path / ".var" / "app" / "info.cemu.Cemu" / "data" / "Cemu" / "mlc01" / "usr" / "save")
+    ]
+
+
+def test_cemu_emudeck_path_only_used_when_roms_wiiu_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/cemu" if name == "cemu" else None)
+    monkeypatch.setattr(emulators_mod, "is_flatpak_installed", lambda app_id: False)
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    assert len(emulators_mod.cemu_save_paths(str(emu_dir))) == 1
+    (emu_dir / "roms" / "wiiu").mkdir(parents=True)
+    assert emulators_mod.cemu_save_paths(str(emu_dir))[-1] == str(emu_dir / "roms/wiiu/mlc01/usr/save")
+
+
+def _write_ryujinx_index(ryujinx_dir, entries, last_published):
+    """entries: [(title_id, save_id)] -> imkvdb.arc in index slot 0."""
+    import struct
+    slot = ryujinx_dir / "bis" / "system" / "save" / "8000000000000000" / "0"
+    slot.mkdir(parents=True)
+    data = b"IMKV" + struct.pack("<II", 0, len(entries))
+    for title_id, save_id in entries:
+        key = struct.pack("<Q", title_id).ljust(0x40, b"\x00")
+        value = struct.pack("<Q", save_id).ljust(0x40, b"\x00")
+        data += b"IMEN" + struct.pack("<II", 0x40, 0x40) + key + value
+    (slot / "imkvdb.arc").write_bytes(data)
+    (slot / "lastPublishedId").write_bytes(struct.pack("<Q", last_published))
+
+
+class TestRyujinxSaveIndex:
+    GAME_A = 0x0100000000010000
+    GAME_B = 0x01008CF01BAAC000
+
+    def test_consistent_profile_has_no_problems(self, tmp_path):
+        ryu = tmp_path / "Ryujinx"
+        _write_ryujinx_index(ryu, [(self.GAME_A, 1), (0, 0x8000000000000030)], last_published=1)
+        profile = tmp_path / "profile"
+        _write_ryujinx_extra_data(profile / "ryujinx" / "saves" / "0000000000000001", self.GAME_A)
+
+        problems = emulators_mod.check_ryujinx_save_index(str(profile), str(ryu))
+
+        assert problems == {"mismatched": [], "orphaned": [], "reusable": []}
+
+    def test_detects_mismatched_orphaned_and_reusable_save_ids(self, tmp_path):
+        ryu = tmp_path / "Ryujinx"
+        _write_ryujinx_index(ryu, [(self.GAME_B, 2)], last_published=2)
+        saves = tmp_path / "profile" / "ryujinx" / "saves"
+        _write_ryujinx_extra_data(saves / "0000000000000002", self.GAME_A)  # index says GAME_B
+        _write_ryujinx_extra_data(saves / "0000000000000005", self.GAME_B)  # not indexed, above last ID
+
+        problems = emulators_mod.check_ryujinx_save_index(str(tmp_path / "profile"), str(ryu))
+
+        assert len(problems["mismatched"]) == 1 and "0000000000000002" in problems["mismatched"][0]
+        assert problems["orphaned"] == ["0000000000000005 (01008cf01baac000)"]
+        assert problems["reusable"] == ["0000000000000005"]
+
+    def test_no_index_means_no_findings(self, tmp_path):
+        saves = tmp_path / "profile" / "ryujinx" / "saves"
+        _write_ryujinx_extra_data(saves / "0000000000000001", self.GAME_A)
+
+        problems = emulators_mod.check_ryujinx_save_index(str(tmp_path / "profile"), str(tmp_path / "none"))
+
+        assert problems == {"mismatched": [], "orphaned": [], "reusable": []}
+
+    def test_corrupt_index_is_ignored(self, tmp_path):
+        ryu = tmp_path / "Ryujinx"
+        slot = ryu / "bis" / "system" / "save" / "8000000000000000" / "0"
+        slot.mkdir(parents=True)
+        (slot / "imkvdb.arc").write_bytes(b"IMKV\x00\x00\x00\x00\x05\x00\x00\x00IMEN")
+
+        assert emulators_mod.read_ryujinx_save_index(str(ryu)) is None

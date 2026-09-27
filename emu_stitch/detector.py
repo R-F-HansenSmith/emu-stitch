@@ -78,10 +78,33 @@ def extract_account_name(block: str) -> Optional[str]:
     return None
 
 
-def sanitize_name(name: str) -> str:
-    """Sanitize account/persona name into a valid, clean folder name."""
+def sanitize_name(name: str, fallback: str = "Default_User") -> str:
+    """Sanitize account/persona name into a valid, clean folder name.
+    Returns `fallback` when nothing usable is left (e.g. a name written
+    entirely in non-Latin characters)."""
     sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
-    return sanitized.strip('_') or "Default_User"
+    return sanitized.strip('_') or fallback
+
+
+# Native Steam, the legacy ~/.steam symlink, and Flatpak Steam, in that order.
+STEAM_ROOT_CANDIDATES = [
+    "~/.local/share/Steam",
+    "~/.steam/steam",
+    "~/.var/app/com.valvesoftware.Steam/.local/share/Steam",
+]
+
+
+def steam_root() -> str:
+    """The Steam install directory: the first candidate that has a
+    loginusers.vdf, else the first that exists, else the native default."""
+    roots = [os.path.expanduser(p) for p in STEAM_ROOT_CANDIDATES]
+    for root in roots:
+        if os.path.exists(os.path.join(root, "config", "loginusers.vdf")):
+            return root
+    for root in roots:
+        if os.path.isdir(root):
+            return root
+    return roots[0]
 
 
 def detect_active_steam_user() -> Tuple[Optional[str], Optional[str]]:
@@ -91,8 +114,9 @@ def detect_active_steam_user() -> Tuple[Optional[str], Optional[str]]:
     and extracts AccountName (or PersonaName), falling back to userdata/ mtime.
     Returns: (steamid3, sanitized_account_name)
     """
-    loginusers_vdf = os.path.expanduser("~/.local/share/Steam/config/loginusers.vdf")
-    userdata_dir = os.path.expanduser("~/.local/share/Steam/userdata")
+    root = steam_root()
+    loginusers_vdf = os.path.join(root, "config", "loginusers.vdf")
+    userdata_dir = os.path.join(root, "userdata")
 
     # 1. Inspect loginusers.vdf
     if os.path.exists(loginusers_vdf):
@@ -112,7 +136,7 @@ def detect_active_steam_user() -> Tuple[Optional[str], Optional[str]]:
                 candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
                 top = candidates[0]
                 s_id3, raw_name = top[2], top[3]
-                clean_name = sanitize_name(raw_name) if raw_name else f"User_{s_id3}"
+                clean_name = sanitize_name(raw_name or "", fallback=f"User_{s_id3}")
                 return s_id3, clean_name
         except Exception as e:
             logging.error(f"Error parsing loginusers.vdf: {e}")
@@ -132,7 +156,7 @@ def detect_active_steam_user() -> Tuple[Optional[str], Optional[str]]:
                     match = re.search(r'"' + steamid64 + r'"\s*\{([^}]+)\}', content, re.DOTALL)
                     if match:
                         raw_name = extract_account_name(match.group(1))
-                        account_name = sanitize_name(raw_name) if raw_name else f"User_{steamid3}"
+                        account_name = sanitize_name(raw_name or "", fallback=f"User_{steamid3}")
                 except Exception:
                     pass
             if not account_name:

@@ -17,9 +17,21 @@ from rich.table import Table
 from .config import DEFAULT_BACKUP_RETENTION, is_configured, set_backup_retention
 from . import __version__
 from .detector import detect_emulation_dir, detect_active_steam_user
-from .switcher import run_switch, setup_systemd_watcher, list_profiles
+from .switcher import (
+    run_switch,
+    setup_systemd_watcher,
+    watcher_installed,
+    list_profiles,
+    emu_stitch_executable,
+    quote_exec_arg,
+)
 from .fstab import audit_mount_permissions
-from .emulators import audit_emulator_saves, detect_installed_emulators
+from .emulators import (
+    audit_emulator_saves,
+    check_ryujinx_save_index,
+    detect_installed_emulators,
+    ryujinx_config_dirs,
+)
 from .syncthing import (
     check_syncthing_installed,
     ensure_syncthing_service,
@@ -147,6 +159,7 @@ def cmd_setup(args):
     autostart_dir = os.path.expanduser("~/.config/autostart")
     desktop_file = os.path.join(autostart_dir, "emu_stitch.desktop")
     autostart_done = os.path.exists(desktop_file)
+    watcher_done = watcher_installed()
 
     st_active = False
     if syncthing_available:
@@ -161,6 +174,16 @@ def cmd_setup(args):
     else:
         do_autostart = prompt_yes_no(
             "Run emu-stitch automatically on login to switch save profiles?",
+            default=True, auto_yes=auto_yes,
+        )
+
+    do_watcher = False
+    if watcher_done:
+        print_success("Steam account watcher: already configured")
+    else:
+        do_watcher = prompt_yes_no(
+            "Switch save profiles automatically whenever the Steam account changes "
+            "(installs a systemd user unit)?",
             default=True, auto_yes=auto_yes,
         )
 
@@ -194,6 +217,8 @@ def cmd_setup(args):
     changes = []
     if not autostart_done and do_autostart:
         changes.append(f"Create autostart entry: {desktop_file}")
+    if do_watcher:
+        changes.append("Install and enable systemd user units: emu-stitch-watcher.path / .service")
     if do_syncthing_enable:
         changes.append("Enable and start syncthing.service")
     if do_syncthing_register:
@@ -222,15 +247,18 @@ def cmd_setup(args):
     print_success(f"Active save profile: {profile} ({path})")
 
     if not autostart_done and do_autostart:
-        wrapper_bin = os.path.expanduser("~/.local/bin/emu-stitch")
+        exec_bin = quote_exec_arg(emu_stitch_executable())
         os.makedirs(autostart_dir, exist_ok=True)
         with open(desktop_file, "w") as f:
-            f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={wrapper_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
+            f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={exec_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
         print_success(f"Autostart entry created: {desktop_file}")
 
-    w_ok, w_msg = setup_systemd_watcher()
-    if w_ok:
-        print_success(f"Steam User Watcher: {w_msg}")
+    if do_watcher:
+        w_ok, w_msg = setup_systemd_watcher()
+        if w_ok:
+            print_success(f"Steam User Watcher: {w_msg}")
+        else:
+            print_warning(f"Steam User Watcher: {w_msg}")
 
     if do_syncthing_enable:
         ok, msg = ensure_syncthing_service(enable=True)
@@ -257,7 +285,7 @@ def cmd_switch(args):
 
 def cmd_pair(args):
     print_banner()
-    device_id = args.device_id
+    device_id = args.device_id.strip().upper()
     console.rule("[bold]Pairing Remote Device[/]")
     cprint(f"Target Device ID: [cyan]{esc(device_id)}[/]\n")
 
@@ -268,16 +296,24 @@ def cmd_pair(args):
         )
         return
 
-    ok, msg = auto_pair_device(device_id)
+    auto_accept = getattr(args, "auto_accept", False)
+    if auto_accept:
+        print_warning(
+            "--auto-accept lets this device create new synced folders on this machine "
+            "without asking. Only use it for machines you fully control."
+        )
+
+    ok, msg = auto_pair_device(device_id, auto_accept=auto_accept)
     if ok:
         print_success("Device Pairing Complete!")
         cprint(f"  {esc(msg)}")
+        cprint("  Accept the incoming share request in Syncthing's web UI on the other machine.")
     else:
         print_warning(f"Device Pairing Error: {msg}")
 
 def cmd_unpair(args):
     print_banner()
-    device_id = args.device_id
+    device_id = args.device_id.strip().upper()
     console.rule("[bold]Unpairing Remote Device[/]")
     cprint(f"Target Device ID: [cyan]{esc(device_id)}[/]\n")
 
@@ -331,7 +367,7 @@ def cmd_audit(args):
             ryu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Ryujinx")), 0)
             cemu_count = next((g["count"] for g in profile_games if g["emulator"].startswith("Cemu")), 0)
             table.add_row(
-                p["name"],
+                esc(p["name"]),
                 str(p["steamid3"]) if p.get("steamid3") else "-",
                 "●" if p["active"] else "",
                 str(ryu_count),
@@ -357,6 +393,8 @@ def cmd_audit(args):
             cprint(f"   • [bold]{esc(emu_name)}[/] [green]INSTALLED[/] -> Symlink routing active")
         else:
             cprint(f"   • [bold]{esc(emu_name)}[/] [yellow]NOT INSTALLED[/] -> Symlink routing skipped")
+    if installed_emu.get("ryujinx"):
+        audit_ryujinx_index(profiles)
 
     # 4. Save Games & Profile Sync Status
     real_profile_path = os.readlink(active_link) if os.path.islink(active_link) else active_link
@@ -394,7 +432,7 @@ def cmd_audit(args):
             table.add_column("STATUS")
             table.add_column("ADDRESS")
             for d in devices:
-                table.add_row(d["name"], "ONLINE" if d["connected"] else "OFFLINE", d["address"])
+                table.add_row(esc(d["name"]), "ONLINE" if d["connected"] else "OFFLINE", esc(d["address"]))
             console.print(table)
 
             # Full IDs are too long to fit as a table column without either
@@ -409,12 +447,32 @@ def cmd_audit(args):
         print_section_header(5, "Syncthing Status")
         cprint(f"   {esc(st_msg)}")
 
+def audit_ryujinx_index(profiles) -> None:
+    """Warn about profile save folders that Ryujinx's machine-wide save
+    index would load for the wrong game, never load, or reuse."""
+    for ryujinx_dir in ryujinx_config_dirs():
+        for p in profiles:
+            problems = check_ryujinx_save_index(p["path"], ryujinx_dir)
+            if not any(problems.values()):
+                continue
+            print_warning(f"Ryujinx save index mismatch for profile '{p['name']}' ({ryujinx_dir}):")
+            for line in problems["mismatched"]:
+                cprint(f"     [red]✘ {esc(line)}[/]")
+            if problems["orphaned"]:
+                cprint(f"     [yellow]• Not in Ryujinx's save index (won't be loaded): {esc(', '.join(problems['orphaned']))}[/]")
+            if problems["reusable"]:
+                cprint(f"     [yellow]• Above Ryujinx's last issued save ID (a new save may reuse the number): {esc(', '.join(problems['reusable']))}[/]")
+            cprint("     [dim]Usually caused by saves created on another machine or under a different Ryujinx install. "
+                   "Back up this profile before playing the affected games. See README: Ryujinx save index.[/]")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="emu-stitch: Open-Source Multi-User Emulator Save Synchronizer"
     )
     parser.add_argument("--dir", help="Custom EmuDeck directory path")
     parser.add_argument("--version", action="version", version=f"emu-stitch {__version__}")
+    parser.add_argument("--debug", action="store_true", help="Verbose logging and full tracebacks on errors")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -430,6 +488,10 @@ def main():
 
     parser_pair = subparsers.add_parser("pair", help="Pair with a remote machine using its Device ID")
     parser_pair.add_argument("device_id", help="The Syncthing Device ID of the remote machine (8 groups of 7 characters, e.g. XXXXXXX-XXXXXXX-...)")
+    parser_pair.add_argument(
+        "--auto-accept", action="store_true",
+        help="Also let this device create new synced folders here without asking (only for machines you fully control)",
+    )
     parser_pair.set_defaults(func=cmd_pair)
 
     parser_unpair = subparsers.add_parser("unpair", help="Remove a previously paired remote machine using its Device ID")
@@ -438,7 +500,7 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.WARNING, format="%(levelname)s: %(message)s")
 
     if not args.command:
         print_banner()
@@ -452,7 +514,9 @@ def main():
         print_warning("Interrupted.")
         sys.exit(130)
     except Exception as e:
-        print_error(str(e))
+        if args.debug:
+            raise
+        print_error(f"{e} (re-run with --debug for details)")
         sys.exit(1)
 
 if __name__ == "__main__":

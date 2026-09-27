@@ -82,18 +82,45 @@ def test_cli_pair_dispatches_device_id_to_auto_pair_device(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(
         cli_mod, "auto_pair_device",
-        lambda device_id: calls.append(device_id) or (True, "paired!"),
+        lambda device_id, auto_accept=False: calls.append((device_id, auto_accept)) or (True, "paired!"),
+    )
+
+    cli_mod.main()
+
+    assert calls == [(VALID_DEVICE_ID, False)]
+    assert "paired!" in capsys.readouterr().out
+
+
+def test_cli_pair_normalizes_lowercase_device_id(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", VALID_DEVICE_ID.lower()])
+    calls = []
+    monkeypatch.setattr(
+        cli_mod, "auto_pair_device",
+        lambda device_id, auto_accept=False: calls.append(device_id) or (True, "ok"),
     )
 
     cli_mod.main()
 
     assert calls == [VALID_DEVICE_ID]
-    assert "paired!" in capsys.readouterr().out
+
+
+def test_cli_pair_auto_accept_is_opt_in_and_warns(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", "--auto-accept", VALID_DEVICE_ID])
+    calls = []
+    monkeypatch.setattr(
+        cli_mod, "auto_pair_device",
+        lambda device_id, auto_accept=False: calls.append(auto_accept) or (True, "ok"),
+    )
+
+    cli_mod.main()
+
+    assert calls == [True]
+    assert "without asking" in capsys.readouterr().out
 
 
 def test_cli_pair_reports_failure_without_raising(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["emu-stitch", "pair", VALID_DEVICE_ID])
-    monkeypatch.setattr(cli_mod, "auto_pair_device", lambda device_id: (False, "not found"))
+    monkeypatch.setattr(cli_mod, "auto_pair_device", lambda device_id, auto_accept=False: (False, "not found"))
 
     cli_mod.main()
 
@@ -437,6 +464,7 @@ class TestSetupBackupRetention:
         monkeypatch.setattr(cli_mod, "check_syncthing_installed", lambda: False)
         monkeypatch.setattr(cli_mod, "run_switch", lambda emu_dir: ("alice", "/path"))
         monkeypatch.setattr(cli_mod, "setup_systemd_watcher", lambda: (True, "watching"))
+        monkeypatch.setattr(cli_mod, "watcher_installed", lambda: False)
 
     def test_prompts_and_persists_default_on_first_run(self, tmp_path, monkeypatch, capsys):
         fake_home = tmp_path / "home"
@@ -469,3 +497,71 @@ class TestSetupBackupRetention:
         out = capsys.readouterr().out
         assert "Backup retention:" in out
         assert "already configured" in out
+
+
+class TestSetupWatcherConsent:
+    def _run_setup(self, monkeypatch, tmp_path, answers):
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+        monkeypatch.setattr(sys, "argv", ["emu-stitch", "setup"])
+        monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(tmp_path / "Emulation"))
+        monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+        monkeypatch.setattr(cli_mod, "check_syncthing_installed", lambda: False)
+        monkeypatch.setattr(cli_mod, "run_switch", lambda emu_dir: ("alice", "/path"))
+        monkeypatch.setattr(cli_mod, "watcher_installed", lambda: False)
+        calls = []
+        monkeypatch.setattr(cli_mod, "setup_systemd_watcher", lambda: calls.append(1) or (True, "watching"))
+        replies = iter(answers)
+        monkeypatch.setattr("builtins.input", lambda *a: next(replies))
+        cli_mod.main()
+        return calls
+
+    def test_declining_the_watcher_prompt_installs_nothing(self, tmp_path, monkeypatch):
+        # autostart: n, watcher: n, retention: default, proceed: y
+        calls = self._run_setup(monkeypatch, tmp_path, ["n", "n", "", "y"])
+        assert calls == []
+
+    def test_accepting_the_watcher_lists_it_and_installs_it(self, tmp_path, monkeypatch, capsys):
+        calls = self._run_setup(monkeypatch, tmp_path, ["n", "y", "", "y"])
+        assert calls == [1]
+        assert "emu-stitch-watcher" in capsys.readouterr().out
+
+
+def test_cli_audit_escapes_markup_in_device_and_profile_names(tmp_path, monkeypatch, capsys):
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "audit"])
+    monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
+    monkeypatch.setattr(cli_mod, "audit_mount_permissions", lambda d: (False, "/home", "ok"))
+    monkeypatch.setattr(cli_mod, "detect_active_steam_user", lambda: (None, None))
+    monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
+    monkeypatch.setattr(cli_mod, "get_profile_sync_status", lambda p: ("UNKNOWN", "n/a"))
+    monkeypatch.setattr(cli_mod, "audit_emulator_saves", lambda p: [])
+    monkeypatch.setattr(cli_mod, "list_profiles", lambda emu_dir: [
+        {"name": "bad[/]profile", "path": str(emu_dir), "active": True, "steamid3": None},
+    ])
+    monkeypatch.setattr(cli_mod, "ensure_syncthing_service", lambda enable=False: (True, "running"))
+    monkeypatch.setattr(cli_mod, "get_syncthing_credentials", lambda: ("apikey", "SELF-ID"))
+    monkeypatch.setattr(cli_mod, "get_paired_devices_status", lambda: [
+        {"id": "X", "name": "evil[/]name", "connected": False, "address": "[bold]offline"},
+    ])
+
+    cli_mod.main()
+
+    out = capsys.readouterr().out
+    assert "evil[/]name" in out
+    assert "bad[/]profile" in out
+
+
+def test_main_debug_flag_reraises_with_traceback(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["emu-stitch", "--debug", "switch"])
+    monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: "/tmp/does-not-matter")
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli_mod, "run_switch", boom)
+
+    with pytest.raises(RuntimeError):
+        cli_mod.main()

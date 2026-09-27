@@ -161,3 +161,28 @@ def test_detect_active_steam_user_falls_back_to_userdata_mtime(tmp_path, monkeyp
 
     assert steamid3 == "222"
     assert account_name == "User_222"
+
+
+def test_sanitize_name_uses_custom_fallback():
+    assert sanitize_name("日本語", fallback="User_42") == "User_42"
+
+
+def test_detect_active_steam_user_non_latin_name_gets_unique_fallback(tmp_path, monkeypatch):
+    """Two users with all-non-Latin names must not both collapse to Default_User."""
+    vdf = LOGINUSERS_VDF_TEMPLATE.replace('"AccountName"\t\t"newuser"\n', "").replace('"NewUser"', '"日本語"')
+    _patch_steam_paths(monkeypatch, tmp_path, vdf)
+
+    steamid3, account_name = detect_active_steam_user()
+
+    assert account_name == f"User_{steamid3}"
+
+
+def test_detect_active_steam_user_finds_flatpak_steam(tmp_path, monkeypatch):
+    flatpak_config = tmp_path / ".var" / "app" / "com.valvesoftware.Steam" / ".local" / "share" / "Steam" / "config"
+    flatpak_config.mkdir(parents=True)
+    (flatpak_config / "loginusers.vdf").write_text(LOGINUSERS_VDF_TEMPLATE)
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path)))
+
+    steamid3, account_name = detect_active_steam_user()
+
+    assert account_name == "newuser"

@@ -9,17 +9,26 @@ import os
 import shutil
 import struct
 import subprocess
-import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from .backups import prune_old_backups
-from .config import get_backup_retention
+from .backups import migrate_to_backup
 
 # Wii U title-ID high half for the "Game" category (retail/eShop base games).
 # Other categories under 0005xxxx exist (0005000c DLC, 0005000e Update,
 # 00050010 System Applications like Mii Maker / Health & Safety Info) but
 # only 00050000 represents an actual installed game with its own save data.
 CEMU_GAME_CATEGORY = "00050000"
+
+RYUJINX_FLATPAK = "org.ryujinx.Ryujinx"
+CEMU_FLATPAK = "info.cemu.Cemu"
+
+# Ryujinx (like real Switch firmware) never finds a save by scanning
+# bis/user/save; it looks the game up in a machine-wide save-data index — a
+# key/value store in the 8000000000000000 system save — to get the numbered
+# save folder to open. That index is not part of any emu-stitch profile.
+RYUJINX_INDEX_SAVE = os.path.join("bis", "system", "save", "8000000000000000")
+# Save IDs at or above this are system saves, stored outside bis/user/save.
+_SYSTEM_SAVE_ID_MIN = 0x8000000000000000
 
 
 def is_flatpak_installed(app_id: str) -> bool:
@@ -31,27 +40,43 @@ def is_flatpak_installed(app_id: str) -> bool:
         return False
 
 
+def ryujinx_config_dirs() -> List[str]:
+    """Every Ryujinx config root in use on this system: the native one
+    (~/.config/Ryujinx) and/or the Flatpak sandbox's own copy."""
+    dirs = []
+    native = os.path.expanduser("~/.config/Ryujinx")
+    if os.path.exists(native) or shutil.which("ryujinx") or shutil.which("Ryujinx"):
+        dirs.append(native)
+    if is_flatpak_installed(RYUJINX_FLATPAK):
+        dirs.append(os.path.expanduser(f"~/.var/app/{RYUJINX_FLATPAK}/config/Ryujinx"))
+    return dirs
+
+
+def cemu_save_paths(emu_dir: Optional[str] = None) -> List[str]:
+    """Every Cemu `mlc01/usr/save` path in use on this system: native,
+    Flatpak, and (if `emu_dir` is given and has a roms/wiiu folder) EmuDeck's
+    in-tree mlc01."""
+    paths = []
+    native_data = os.path.expanduser("~/.local/share/Cemu")
+    if (os.path.exists(native_data) or os.path.exists(os.path.expanduser("~/.config/Cemu"))
+            or shutil.which("cemu") or shutil.which("Cemu")):
+        paths.append(os.path.join(native_data, "mlc01/usr/save"))
+    if is_flatpak_installed(CEMU_FLATPAK):
+        paths.append(os.path.expanduser(f"~/.var/app/{CEMU_FLATPAK}/data/Cemu/mlc01/usr/save"))
+    if paths and emu_dir and os.path.isdir(os.path.join(emu_dir, "roms/wiiu")):
+        paths.append(os.path.join(emu_dir, "roms/wiiu/mlc01/usr/save"))
+    return paths
+
+
 def detect_installed_emulators() -> Dict[str, bool]:
     """
     Detect which emulators are installed on the system via config paths, binaries, or Flatpaks.
     Returns: dict { 'ryujinx': True/False, 'cemu': True/False }
     """
-    results: Dict[str, bool] = {}
-
-    # 1. Ryujinx Check
-    ryu_config = os.path.expanduser("~/.config/Ryujinx")
-    ryu_bin = shutil.which("ryujinx") or shutil.which("Ryujinx")
-    ryu_flatpak = is_flatpak_installed("org.ryujinx.Ryujinx")
-    results["ryujinx"] = os.path.exists(ryu_config) or bool(ryu_bin) or ryu_flatpak
-
-    # 2. Cemu Check
-    cemu_data = os.path.expanduser("~/.local/share/Cemu")
-    cemu_config = os.path.expanduser("~/.config/Cemu")
-    cemu_bin = shutil.which("cemu") or shutil.which("Cemu")
-    cemu_flatpak = is_flatpak_installed("info.cemu.Cemu")
-    results["cemu"] = os.path.exists(cemu_data) or os.path.exists(cemu_config) or bool(cemu_bin) or cemu_flatpak
-
-    return results
+    return {
+        "ryujinx": bool(ryujinx_config_dirs()),
+        "cemu": bool(cemu_save_paths()),
+    }
 
 
 def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
@@ -62,11 +87,9 @@ def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
     - If `link_path` is already a symlink pointing at `target_dir`: no-op.
     - If `link_path` is a symlink pointing elsewhere (stale): replace it
       atomically, creating `target_dir` if needed.
-    - If `link_path` is a real file/directory: merge-copy its contents into
-      `target_dir` (existing files at the destination win, source is never
-      overwritten), then rename the original to
-      `<link_path>.bak-<YYYYMMDD-HHMMSS>` (never delete), then create the
-      symlink.
+    - If `link_path` is a real file/directory: migrate it into `target_dir`
+      and keep the original as a timestamped backup (see
+      backups.migrate_to_backup), then create the symlink.
     """
     if os.path.islink(target_dir):
         os.unlink(target_dir)
@@ -84,30 +107,16 @@ def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
         os.replace(tmp_link, link_path)
         return
 
-    if os.path.isdir(link_path):
-        for root, dirs, files in os.walk(link_path):
-            rel = os.path.relpath(root, link_path)
-            dest_root = target_dir if rel == "." else os.path.join(target_dir, rel)
-            os.makedirs(dest_root, exist_ok=True)
-            for fname in files:
-                src_f = os.path.join(root, fname)
-                dst_f = os.path.join(dest_root, fname)
-                if not os.path.exists(dst_f):
-                    shutil.copy2(src_f, dst_f)
-        backup_path = f"{link_path}.bak-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        os.rename(link_path, backup_path)
-        prune_old_backups(link_path, get_backup_retention())
-    elif os.path.isfile(link_path):
-        backup_path = f"{link_path}.bak-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        os.rename(link_path, backup_path)
-        prune_old_backups(link_path, get_backup_retention())
+    if os.path.lexists(link_path):
+        migrate_to_backup(link_path, target_dir)
 
     os.symlink(real_target, link_path)
 
 
-def configure_ryujinx_symlinks(active_link: str) -> None:
+def configure_ryujinx_symlinks(active_link: str, ryujinx_dir: Optional[str] = None) -> None:
     """Ensure Ryujinx bis/user/save and saveMeta symlinks are correctly routed."""
-    ryujinx_user = os.path.expanduser("~/.config/Ryujinx/bis/user")
+    ryujinx_dir = ryujinx_dir or os.path.expanduser("~/.config/Ryujinx")
+    ryujinx_user = os.path.join(ryujinx_dir, "bis", "user")
     os.makedirs(ryujinx_user, exist_ok=True)
 
     for name, subtarget in [("save", "saves"), ("saveMeta", "saveMeta")]:
@@ -118,12 +127,8 @@ def configure_ryujinx_symlinks(active_link: str) -> None:
 
 def configure_cemu_symlinks(emu_dir: str, active_link: str) -> None:
     """Ensure Cemu mlc01/usr/save symlinks are correctly routed."""
-    cemu_targets = [
-        os.path.expanduser("~/.local/share/Cemu/mlc01/usr/save"),
-        os.path.join(emu_dir, "roms/wiiu/mlc01/usr/save")
-    ]
     expected_cemu_target = os.path.join(active_link, "Cemu/saves")
-    for link_path in cemu_targets:
+    for link_path in cemu_save_paths(emu_dir):
         os.makedirs(os.path.dirname(link_path), exist_ok=True)
         _safe_replace_with_symlink(link_path, expected_cemu_target)
 
@@ -143,6 +148,106 @@ def _read_ryujinx_save_title_id(save_dir: str) -> Optional[int]:
         if len(header) == 8:
             return struct.unpack("<Q", header)[0]
     return None
+
+
+def _newest_ryujinx_index_slot(ryujinx_dir: str) -> Optional[str]:
+    """The index is committed to two alternating slots (0/ and 1/); the one
+    written most recently is current."""
+    slots = [
+        os.path.join(ryujinx_dir, RYUJINX_INDEX_SAVE, slot)
+        for slot in ("0", "1")
+        if os.path.isfile(os.path.join(ryujinx_dir, RYUJINX_INDEX_SAVE, slot, "imkvdb.arc"))
+    ]
+    if not slots:
+        return None
+    return max(slots, key=lambda d: os.path.getmtime(os.path.join(d, "imkvdb.arc")))
+
+
+def read_ryujinx_save_index(ryujinx_dir: str) -> Optional[Tuple[Dict[int, int], int]]:
+    """
+    Parse Ryujinx's save-data index (imkvdb.arc): an "IMKV" header with an
+    entry count, then "IMEN" entries each holding a 0x40-byte key (a
+    SaveDataAttribute, whose first u64 is the title ID) and a 0x40-byte
+    value (a SaveDataIndexerValue, whose first u64 is the save ID).
+
+    Returns ({user save ID: title ID}, last published save ID), or None if
+    there's no index or it can't be parsed.
+    """
+    slot = _newest_ryujinx_index_slot(ryujinx_dir)
+    if slot is None:
+        return None
+    try:
+        with open(os.path.join(slot, "imkvdb.arc"), "rb") as f:
+            data = f.read()
+        magic, _, count = struct.unpack_from("<4sII", data, 0)
+        if magic != b"IMKV":
+            return None
+        index: Dict[int, int] = {}
+        offset = 12
+        for _ in range(count):
+            entry_magic, key_size, value_size = struct.unpack_from("<4sII", data, offset)
+            if entry_magic != b"IMEN" or key_size < 8 or value_size < 8:
+                return None
+            offset += 12
+            title_id = struct.unpack_from("<Q", data, offset)[0]
+            save_id = struct.unpack_from("<Q", data, offset + key_size)[0]
+            offset += key_size + value_size
+            if save_id < _SYSTEM_SAVE_ID_MIN:
+                index[save_id] = title_id
+        last_published = 0
+        last_path = os.path.join(slot, "lastPublishedId")
+        if os.path.isfile(last_path):
+            with open(last_path, "rb") as f:
+                raw = f.read(8)
+            if len(raw) == 8:
+                last_published = struct.unpack("<Q", raw)[0]
+        return index, last_published
+    except (OSError, struct.error):
+        return None
+
+
+def check_ryujinx_save_index(profile_dir: str, ryujinx_dir: str) -> Dict[str, List[str]]:
+    """
+    Read-only consistency check between a profile's Ryujinx save folders and
+    the machine's save index. Save folders created on another machine, or
+    under a different index, can end up:
+
+    - "mismatched": the index maps that folder number to a *different* game,
+      so Ryujinx will hand this folder's data to the wrong game.
+    - "orphaned": the index doesn't reference the folder at all, so Ryujinx
+      will never load it.
+    - "reusable": the folder's number is above the index's last issued ID,
+      so the next new save Ryujinx creates may be given the same number.
+
+    Returns {"mismatched": [...], "orphaned": [...], "reusable": [...]}
+    of human-readable descriptions (all empty if no index is available).
+    """
+    problems: Dict[str, List[str]] = {"mismatched": [], "orphaned": [], "reusable": []}
+    parsed = read_ryujinx_save_index(ryujinx_dir)
+    saves_dir = os.path.join(profile_dir, "ryujinx", "saves")
+    if parsed is None or not os.path.isdir(saves_dir):
+        return problems
+    index, last_published = parsed
+
+    for name in sorted(os.listdir(saves_dir)):
+        try:
+            save_id = int(name, 16)
+        except ValueError:
+            continue
+        if len(name) != 16 or not os.path.isdir(os.path.join(saves_dir, name)):
+            continue
+        title_id = _read_ryujinx_save_title_id(os.path.join(saves_dir, name))
+        title = f"{title_id:016x}" if title_id is not None else "unknown title"
+        if save_id in index:
+            if title_id is not None and index[save_id] != title_id:
+                problems["mismatched"].append(
+                    f"{name} holds {title}, but Ryujinx maps it to {index[save_id]:016x}"
+                )
+        else:
+            problems["orphaned"].append(f"{name} ({title})")
+        if save_id > last_published:
+            problems["reusable"].append(name)
+    return problems
 
 
 def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
@@ -218,10 +323,7 @@ def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
 
 def configure_all_emulators(emu_dir: str, active_link: str, profile_name: str) -> None:
     """Run emulator configuration routines ONLY for detected/installed emulators."""
-    installed = detect_installed_emulators()
+    for ryujinx_dir in ryujinx_config_dirs():
+        configure_ryujinx_symlinks(active_link, ryujinx_dir)
 
-    if installed.get("ryujinx"):
-        configure_ryujinx_symlinks(active_link)
-
-    if installed.get("cemu"):
-        configure_cemu_symlinks(emu_dir, active_link)
+    configure_cemu_symlinks(emu_dir, active_link)

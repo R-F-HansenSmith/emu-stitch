@@ -8,10 +8,14 @@ import pytest
 import emu_stitch.ryujinx as ryu_mod
 from emu_stitch.ryujinx import (
     INDEX_SAVE,
+    PROFILE_INDEX,
     apply_reindex,
-    auto_reindex,
     check_save_index,
+    ensure_counter,
     load_index,
+    machine_range_base,
+    maintain_profile_index,
+    merge_index_conflicts,
     new_user_value,
     parse_index,
     plan_reindex,
@@ -149,7 +153,9 @@ class TestReindex:
         assert user_map(ryu) == {key(GAME_A): 2, key(GAME_B): 3, key(GAME_C): 6}
         entries, last = load_index(str(ryu))
         assert SYSTEM_ENTRY in entries
-        assert last == 6
+        assert last == 2  # the counter is ensure_counter's job, not the rebuild's
+        assert check_save_index(str(profile), str(ryu))["reusable"] == ["0000000000000003", "0000000000000006"]
+        ensure_counter(str(ryu / INDEX_SAVE), str(profile), BASE)
         assert not any(check_save_index(str(profile), str(ryu)).values())
 
     def test_writes_both_slots_identically(self, tmp_path):
@@ -193,16 +199,6 @@ class TestReindex:
         assert clashing not in mapping
         assert mapping[key(GAME_A)] == 1
 
-    def test_last_published_never_decreases_and_covers_all_profiles(self, tmp_path):
-        ryu, alice, bob = tmp_path / "Ryujinx", tmp_path / "alice", tmp_path / "bob"
-        write_index(ryu, [], last_published=3)
-        write_save(alice, 1, key(GAME_A))
-        write_save(bob, 9, key(GAME_B))
-
-        plan = plan_reindex(str(alice), str(ryu), [str(alice), str(bob)])
-
-        assert plan.last_published == 9
-
     def test_consistent_index_has_no_changes(self, tmp_path):
         ryu, profile = tmp_path / "Ryujinx", tmp_path / "alice"
         write_index(ryu, [(key(GAME_A), 1)], last_published=1)
@@ -234,39 +230,188 @@ class TestReindex:
 
         for _ in range(ryu_mod.INDEX_BACKUPS_KEPT + 3):
             apply_reindex(str(ryu), plan_reindex(str(profile), str(ryu)))
-        backups = [e for e in os.listdir(ryu / INDEX_SAVE.rsplit(os.sep, 1)[0]) if ".bak-" in e]
+        backups = [e for e in os.listdir(ryu / INDEX_SAVE.rsplit(os.sep, 1)[0]) if ".reindex-bak-" in e]
         assert len(backups) == ryu_mod.INDEX_BACKUPS_KEPT
 
 
-class TestAutoReindex:
-    def test_skips_and_warns_while_ryujinx_is_running(self, tmp_path, monkeypatch):
-        ryu, profile = tmp_path / "Ryujinx", tmp_path / "alice"
-        write_index(ryu, [], last_published=0)
+BASE = 0x1234 << 32   # a stand-in machine range for tests
+
+
+def profile_index(profile):
+    return profile / PROFILE_INDEX
+
+
+def write_profile_index(profile, user_entries, last_published):
+    """An index living inside a profile, as emu-stitch routes it."""
+    write_index(profile / "ryujinx", user_entries, last_published)
+    src = profile / "ryujinx" / INDEX_SAVE
+    dst = profile_index(profile)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dst)
+    return dst
+
+
+def counters(index_dir):
+    return [struct.unpack("<Q", (index_dir / s / "lastPublishedId").read_bytes())[0] for s in ("0", "1")]
+
+
+class TestMachineRange:
+    def test_range_is_stable_nonzero_and_below_system_ids(self, tmp_path, monkeypatch):
+        mid = tmp_path / "machine-id"
+        mid.write_text("0123456789abcdef0123456789abcdef\n")
+        monkeypatch.setattr(ryu_mod, "MACHINE_ID_PATHS", (str(mid),))
+
+        base = machine_range_base("/home/deck/.config/Ryujinx")
+
+        assert base == machine_range_base("/home/deck/.config/Ryujinx")
+        assert base >= 1 << 32
+        assert base + (1 << 32) <= 0x8000000000000000
+
+    def test_different_machines_and_installs_get_different_ranges(self, tmp_path, monkeypatch):
+        mid = tmp_path / "machine-id"
+        monkeypatch.setattr(ryu_mod, "MACHINE_ID_PATHS", (str(mid),))
+        mid.write_text("aaaa")
+        deck_native = machine_range_base("/home/deck/.config/Ryujinx")
+        deck_flatpak = machine_range_base("/home/deck/.var/app/org.ryujinx.Ryujinx/config/Ryujinx")
+        mid.write_text("bbbb")
+        desktop = machine_range_base("/home/deck/.config/Ryujinx")
+
+        assert len({deck_native, deck_flatpak, desktop}) == 3
+
+
+class TestEnsureCounter:
+    def test_moves_a_legacy_counter_onto_this_machines_range(self, tmp_path):
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [(key(GAME_A), 7)], last_published=7)
+        write_save(profile, 7, key(GAME_A))
+
+        msg = ensure_counter(str(index_dir), str(profile), BASE)
+
+        assert counters(index_dir) == [BASE, BASE]
+        assert f"{BASE + 1:016x}" in msg
+
+    def test_restores_a_missing_counter(self, tmp_path):
+        """lastPublishedId is never synced, so a profile arriving from another
+        machine has none; Ryujinx must never start counting from 0."""
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [], last_published=0)
+        for slot in ("0", "1"):
+            (index_dir / slot / "lastPublishedId").unlink()
+
+        ensure_counter(str(index_dir), str(profile), BASE)
+
+        assert counters(index_dir) == [BASE, BASE]
+
+    def test_counter_in_range_is_only_ever_raised(self, tmp_path):
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [], last_published=BASE + 5)
+        write_save(profile, BASE + 9, key(GAME_A))   # ours, e.g. restored from backup
+
+        assert ensure_counter(str(index_dir), str(profile), BASE) is None
+        assert counters(index_dir) == [BASE + 9, BASE + 9]
+        ensure_counter(str(index_dir), str(profile), BASE)
+        assert counters(index_dir) == [BASE + 9, BASE + 9]
+
+    def test_other_machines_folders_do_not_move_our_counter(self, tmp_path):
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [], last_published=BASE + 1)
+        write_save(profile, (0x9999 << 32) + 50, key(GAME_A))   # another machine's range
+
+        ensure_counter(str(index_dir), str(profile), BASE)
+
+        assert counters(index_dir) == [BASE + 1, BASE + 1]
+
+
+def conflict_copy(index_dir, slot, user_entries):
+    entries = [SYSTEM_ENTRY] + [(k, new_user_value(sid)) for k, sid in user_entries]
+    path = index_dir / slot / "imkvdb.sync-conflict-20260927-120000-ABCDEFG.arc"
+    path.write_bytes(serialize_index(entries))
+    return path
+
+
+class TestMergeConflicts:
+    DECK = 0x1111 << 32
+    DESK = 0x2222 << 32
+
+    def test_merges_new_saves_from_both_machines(self, tmp_path):
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [(key(GAME_A), 1), (key(GAME_B), self.DECK + 1)], last_published=self.DECK + 1)
+        conflict = conflict_copy(index_dir, "0", [(key(GAME_A), 1), (key(GAME_C), self.DESK + 1)])
         write_save(profile, 1, key(GAME_A))
-        before = (ryu / INDEX_SAVE / "0" / "imkvdb.arc").read_bytes()
-        monkeypatch.setattr(ryu_mod, "ryujinx_running", lambda: True)
+        write_save(profile, self.DECK + 1, key(GAME_B))
+        write_save(profile, self.DESK + 1, key(GAME_C))
 
-        messages = auto_reindex(str(profile), [str(ryu)], [str(profile)])
+        messages = merge_index_conflicts(str(index_dir), str(profile), str(tmp_path / "backups"))
 
-        assert "running" in messages[0]
-        assert (ryu / INDEX_SAVE / "0" / "imkvdb.arc").read_bytes() == before
+        mapping = {k: value_save_id(v) for k, v in parse_index((index_dir / "0" / "imkvdb.arc").read_bytes()) if v[0x18] == 1}
+        assert mapping == {key(GAME_A): 1, key(GAME_B): self.DECK + 1, key(GAME_C): self.DESK + 1}
+        assert (index_dir / "0" / "imkvdb.arc").read_bytes() == (index_dir / "1" / "imkvdb.arc").read_bytes()
+        assert not conflict.exists()
+        assert len(list((tmp_path / "backups").rglob("*sync-conflict*"))) == 1
+        assert "merged 1" in messages[0]
 
-    def test_switching_profiles_repoints_shared_index(self, tmp_path, monkeypatch):
-        """The two-profile case from a real Deck: the same game lives in a
-        different folder number in each profile."""
-        monkeypatch.setattr(ryu_mod, "ryujinx_running", lambda: False)
-        ryu, alice, bob = tmp_path / "Ryujinx", tmp_path / "alice", tmp_path / "bob"
-        write_index(ryu, [(key(GAME_B), 2)], last_published=2)
-        write_save(alice, 2, key(GAME_B))
-        write_save(bob, 2, key(GAME_A, save_type=2))
-        write_save(bob, 3, key(GAME_B))
-        both = [str(alice), str(bob)]
+    def test_same_game_started_on_both_machines_prefers_most_recently_played(self, tmp_path):
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [(key(GAME_A), self.DECK + 1)], last_published=self.DECK + 1)
+        conflict_copy(index_dir, "1", [(key(GAME_A), self.DESK + 1)])
+        deck_save = write_save(profile, self.DECK + 1, key(GAME_A), mtime=1_000_000)
+        write_save(profile, self.DESK + 1, key(GAME_A), mtime=2_000_000)
 
-        auto_reindex(str(bob), [str(ryu)], both)
-        assert user_map(ryu)[key(GAME_B)] == 3
-        auto_reindex(str(alice), [str(ryu)], both)
-        assert user_map(ryu)[key(GAME_B)] == 2
-        assert check_save_index(str(alice), str(ryu))["mismatched"] == []
+        messages = merge_index_conflicts(str(index_dir), str(profile), str(tmp_path / "backups"))
+
+        entries = parse_index((index_dir / "0" / "imkvdb.arc").read_bytes())
+        assert dict(entries)[key(GAME_A)] == new_user_value(self.DESK + 1)
+        assert any("most recently played" in m and f"{self.DECK + 1:016x}" in m for m in messages)
+        assert (deck_save / "0" / "data.bin").exists()   # the other save is never deleted
+
+    def test_merge_is_deterministic_regardless_of_which_copy_is_the_conflict(self, tmp_path):
+        """Both machines may merge the same pair of copies; they must agree,
+        or the merged indexes would conflict again."""
+        results = []
+        for main, other in ((self.DECK, self.DESK), (self.DESK, self.DECK)):
+            profile = tmp_path / f"p{main}"
+            index_dir = write_profile_index(profile, [(key(GAME_A), main + 1)], last_published=main + 1)
+            conflict_copy(index_dir, "0", [(key(GAME_A), other + 1)])
+            write_save(profile, self.DECK + 1, key(GAME_A), mtime=1_000_000)
+            write_save(profile, self.DESK + 1, key(GAME_A), mtime=1_000_000)
+            merge_index_conflicts(str(index_dir), str(profile), str(tmp_path / "b"))
+            results.append((index_dir / "0" / "imkvdb.arc").read_bytes())
+
+        assert results[0] == results[1]
+
+    def test_no_conflicts_means_nothing_is_written(self, tmp_path):
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [(key(GAME_A), 1)], last_published=1)
+        before = (index_dir / "0" / "imkvdb.arc").stat().st_mtime_ns
+
+        assert merge_index_conflicts(str(index_dir), str(profile), str(tmp_path / "b")) == []
+        assert (index_dir / "0" / "imkvdb.arc").stat().st_mtime_ns == before
+
+    def test_unreadable_conflict_copy_is_left_for_review(self, tmp_path):
+        profile = tmp_path / "alice"
+        index_dir = write_profile_index(profile, [(key(GAME_A), 1)], last_published=1)
+        bad = index_dir / "0" / "imkvdb.sync-conflict-20260927-120000-ABCDEFG.arc"
+        bad.write_bytes(b"garbage")
+        before = (index_dir / "0" / "imkvdb.arc").read_bytes()
+
+        messages = merge_index_conflicts(str(index_dir), str(profile), str(tmp_path / "b"))
+
+        assert "manual review" in messages[0]
+        assert bad.exists()
+        assert (index_dir / "0" / "imkvdb.arc").read_bytes() == before
+
+
+def test_maintain_profile_index_merges_then_pins_counter(tmp_path, monkeypatch):
+    monkeypatch.setattr(ryu_mod, "machine_range_base", lambda d: BASE)
+    profile = tmp_path / "alice"
+    index_dir = write_profile_index(profile, [(key(GAME_A), 1)], last_published=1)
+    conflict_copy(index_dir, "0", [(key(GAME_B), (0x9999 << 32) + 1)])
+
+    messages = maintain_profile_index("/any/Ryujinx", str(profile), str(tmp_path / "b"))
+
+    assert len(messages) == 2
+    assert counters(index_dir) == [BASE, BASE]
+    assert key(GAME_B) in dict(parse_index((index_dir / "0" / "imkvdb.arc").read_bytes()))
 
 
 def _fake_proc(tmp_path, processes):

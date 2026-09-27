@@ -14,8 +14,12 @@
 - An existing Syncthing folder pointing at a different path is no longer silently repointed. Previously profiles differing only by case, or a moved Emulation folder, could merge two users' saves.
 - Steam accounts whose names sanitize to the same folder name (or differ only by case) get distinct profiles. Non-Latin names fall back to `User_<steamid>` instead of a shared `Default_User`.
 - `switch` takes a lock, so the autostart entry and watcher can't run it concurrently.
-- New: `audit` checks the active profile against Ryujinx's machine-wide save index and warns about save folders that would be loaded for the wrong game, never loaded, or have their number reused. Unused duplicate save folders are listed too.
-- New (experimental): `emu-stitch ryujinx-reindex` rebuilds Ryujinx's save index from the active profile's own save folders, after backing up the current index. `--auto on` does this on every profile switch. It refuses to run while Ryujinx is open.
+- New: Ryujinx's save index is now part of each profile (`ryujinx/saveIndex`) and swapped in on every switch, so a profile's saves and index always match. Previously the index was shared by the whole machine, so switched or synced saves could be loaded for the wrong game or not at all.
+- New: each machine numbers new Ryujinx saves from its own range (the counter is excluded from sync), so two machines never give the same folder number to different games.
+- New: if both machines added Ryujinx saves while apart, the two copies of the index are merged automatically; a game started on both machines uses the most recently played save, and the other copy is kept.
+- New: `audit` checks the active profile against its Ryujinx save index and lists unused duplicate saves. `emu-stitch ryujinx-reindex` repairs a profile's index from its own save folders (for saves from before this version).
+- `switch` no longer touches Ryujinx's saves or index while Ryujinx is running.
+- The watcher also runs `switch` when Ryujinx saves arrive from another machine, and passes the Emulation directory explicitly. `setup` updates an older watcher.
 
 ### Fixes
 - Flatpak Ryujinx and Cemu are routed inside their sandbox directories. Previously they were detected but the native paths were linked instead.

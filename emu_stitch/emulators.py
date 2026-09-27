@@ -11,7 +11,8 @@ import struct
 import subprocess
 from typing import Dict, List, Optional
 
-from .backups import migrate_to_backup
+from .backups import merge_tree, migrate_to_backup
+from .ryujinx import INDEX_SAVE, PROFILE_INDEX, index_present, maintain_profile_index, ryujinx_running
 
 # Wii U title-ID high half for the "Game" category (retail/eShop base games).
 # Other categories under 0005xxxx exist (0005000c DLC, 0005000e Update,
@@ -106,7 +107,8 @@ def _safe_replace_with_symlink(link_path: str, target_dir: str) -> None:
 
 
 def configure_ryujinx_symlinks(active_link: str, ryujinx_dir: Optional[str] = None) -> None:
-    """Ensure Ryujinx bis/user/save and saveMeta symlinks are correctly routed."""
+    """Ensure Ryujinx's bis/user/save and saveMeta, and its save index, are
+    routed into the active profile."""
     ryujinx_dir = ryujinx_dir or os.path.expanduser("~/.config/Ryujinx")
     ryujinx_user = os.path.join(ryujinx_dir, "bis", "user")
     os.makedirs(ryujinx_user, exist_ok=True)
@@ -115,6 +117,30 @@ def configure_ryujinx_symlinks(active_link: str, ryujinx_dir: Optional[str] = No
         link_path = os.path.join(ryujinx_user, name)
         expected_target = os.path.join(active_link, "ryujinx", subtarget)
         _safe_replace_with_symlink(link_path, expected_target)
+
+    route_ryujinx_index(ryujinx_dir, active_link)
+
+
+def route_ryujinx_index(ryujinx_dir: str, active_link: str) -> None:
+    """
+    Swap Ryujinx's save index (the 8000000000000000 system save) in with the
+    profile, so a profile's saves and the index describing them always
+    travel together.
+
+    A profile without an index yet is seeded with a copy of the one
+    currently in place (Ryujinx's own, or the previous profile's): its saves
+    were numbered by that shared index, so the copy already describes them.
+    Nothing happens until Ryujinx has created its index on first launch.
+    """
+    link_path = os.path.join(ryujinx_dir, INDEX_SAVE)
+    target = os.path.join(active_link, PROFILE_INDEX)
+    if not os.path.lexists(link_path):
+        return
+    if not index_present(target):
+        if not index_present(link_path):
+            return
+        merge_tree(os.path.realpath(link_path), target)
+    _safe_replace_with_symlink(link_path, target)
 
 
 def configure_cemu_symlinks(emu_dir: str, active_link: str) -> None:
@@ -213,9 +239,21 @@ def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:
     return detected_saves
 
 
-def configure_all_emulators(emu_dir: str, active_link: str, profile_name: str) -> None:
-    """Run emulator configuration routines ONLY for detected/installed emulators."""
-    for ryujinx_dir in ryujinx_config_dirs():
-        configure_ryujinx_symlinks(active_link, ryujinx_dir)
+def configure_all_emulators(emu_dir: str, active_link: str, profile_name: str) -> List[str]:
+    """Run emulator configuration routines ONLY for detected/installed
+    emulators. Returns messages worth showing the user."""
+    messages: List[str] = []
+
+    ryujinx_dirs = ryujinx_config_dirs()
+    if ryujinx_dirs and ryujinx_running():
+        messages.append(
+            "Ryujinx is running, so its saves were not switched. Close Ryujinx, then run 'emu-stitch switch'."
+        )
+    else:
+        backup_root = os.path.expanduser("~/.local/state/emu-stitch/ryujinx-index-conflicts")
+        for ryujinx_dir in ryujinx_dirs:
+            configure_ryujinx_symlinks(active_link, ryujinx_dir)
+            messages += maintain_profile_index(ryujinx_dir, os.path.realpath(active_link), backup_root)
 
     configure_cemu_symlinks(emu_dir, active_link)
+    return messages

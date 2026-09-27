@@ -463,8 +463,8 @@ class TestSetupBackupRetention:
         monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
         monkeypatch.setattr(cli_mod, "check_syncthing_installed", lambda: False)
         monkeypatch.setattr(cli_mod, "run_switch", lambda emu_dir: ("alice", "/path"))
-        monkeypatch.setattr(cli_mod, "setup_systemd_watcher", lambda: (True, "watching"))
-        monkeypatch.setattr(cli_mod, "watcher_installed", lambda: False)
+        monkeypatch.setattr(cli_mod, "setup_systemd_watcher", lambda emu_dir: (True, "watching"))
+        monkeypatch.setattr(cli_mod, "watcher_status", lambda emu_dir: "missing")
 
     def test_prompts_and_persists_default_on_first_run(self, tmp_path, monkeypatch, capsys):
         fake_home = tmp_path / "home"
@@ -509,9 +509,9 @@ class TestSetupWatcherConsent:
         monkeypatch.setattr(cli_mod, "detect_installed_emulators", lambda: {"ryujinx": False, "cemu": False})
         monkeypatch.setattr(cli_mod, "check_syncthing_installed", lambda: False)
         monkeypatch.setattr(cli_mod, "run_switch", lambda emu_dir: ("alice", "/path"))
-        monkeypatch.setattr(cli_mod, "watcher_installed", lambda: False)
+        monkeypatch.setattr(cli_mod, "watcher_status", lambda emu_dir: "missing")
         calls = []
-        monkeypatch.setattr(cli_mod, "setup_systemd_watcher", lambda: calls.append(1) or (True, "watching"))
+        monkeypatch.setattr(cli_mod, "setup_systemd_watcher", lambda emu_dir: calls.append(emu_dir) or (True, "watching"))
         replies = iter(answers)
         monkeypatch.setattr("builtins.input", lambda *a: next(replies))
         cli_mod.main()
@@ -524,7 +524,7 @@ class TestSetupWatcherConsent:
 
     def test_accepting_the_watcher_lists_it_and_installs_it(self, tmp_path, monkeypatch, capsys):
         calls = self._run_setup(monkeypatch, tmp_path, ["n", "y", "", "y"])
-        assert calls == [1]
+        assert calls == [str(tmp_path / "Emulation")]
         assert "emu-stitch-watcher" in capsys.readouterr().out
 
 
@@ -573,11 +573,17 @@ class TestRyujinxReindexCommand:
         fake_home.mkdir()
         monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
         emu_dir = tmp_path / "Emulation"
-        (emu_dir / "saves_by_user" / "alice").mkdir(parents=True)
-        os.symlink(str(emu_dir / "saves_by_user" / "alice"), str(emu_dir / "saves"))
+        profile = emu_dir / "saves_by_user" / "alice"
+        (profile / "ryujinx" / "saveIndex").mkdir(parents=True)
+        os.symlink(str(profile), str(emu_dir / "saves"))
+        ryujinx_dir = tmp_path / "Ryujinx"
+        (ryujinx_dir / "bis" / "system" / "save").mkdir(parents=True)
+        os.symlink(str(profile / "ryujinx" / "saveIndex"), str(ryujinx_dir / "bis" / "system" / "save" / "8000000000000000"))
+        self.ryujinx_dir = str(ryujinx_dir)
         monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
-        monkeypatch.setattr(cli_mod, "ryujinx_config_dirs", lambda: ["/fake/Ryujinx"])
+        monkeypatch.setattr(cli_mod, "ryujinx_config_dirs", lambda: [self.ryujinx_dir])
         monkeypatch.setattr(cli_mod, "ryujinx_running", lambda: running)
+        monkeypatch.setattr(cli_mod, "ensure_counter", lambda *a: None)
         applied = []
         monkeypatch.setattr(cli_mod, "apply_reindex", lambda d, plan: applied.append(d) or "/fake/backup")
         return applied
@@ -596,29 +602,26 @@ class TestRyujinxReindexCommand:
     def test_applies_plan_and_reports_backup(self, tmp_path, monkeypatch, capsys):
         from emu_stitch.ryujinx import ReindexPlan
         applied = self._setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: ReindexPlan([], 1, changes=["x: add"]))
+        monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: ReindexPlan([], changes=["x: add"]))
         monkeypatch.setattr(cli_mod, "check_save_index", lambda *a: {"mismatched": [], "orphaned": [], "reusable": [], "duplicates": []})
         monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "-y"])
 
         cli_mod.main()
 
-        assert applied == ["/fake/Ryujinx"]
-        out = capsys.readouterr().out
-        assert "/fake/backup" in out
-        assert "--auto on" in out
+        assert applied == [self.ryujinx_dir]
+        assert "/fake/backup" in capsys.readouterr().out
 
-    def test_auto_toggle_persists_setting(self, tmp_path, monkeypatch):
-        from emu_stitch.config import get_ryujinx_auto_reindex
-        self._setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: None)
+    def test_skips_an_index_not_yet_routed_into_the_profile(self, tmp_path, monkeypatch, capsys):
+        applied = self._setup(tmp_path, monkeypatch)
+        link = os.path.join(self.ryujinx_dir, "bis", "system", "save", "8000000000000000")
+        os.unlink(link)
+        os.mkdir(link)
+        monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "-y"])
 
-        monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "--auto", "on", "-y"])
         cli_mod.main()
-        assert get_ryujinx_auto_reindex() is True
 
-        monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "--auto", "off"])
-        cli_mod.main()
-        assert get_ryujinx_auto_reindex() is False
+        assert applied == []
+        assert "Run 'emu-stitch switch' first" in capsys.readouterr().out
 
 
 def test_reindex_does_not_warn_about_unused_duplicates(tmp_path, monkeypatch, capsys):
@@ -626,7 +629,7 @@ def test_reindex_does_not_warn_about_unused_duplicates(tmp_path, monkeypatch, ca
     trigger the "can't be indexed" warning."""
     from emu_stitch.ryujinx import ReindexPlan
     TestRyujinxReindexCommand()._setup(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: ReindexPlan([], 1, changes=["x: add"]))
+    monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: ReindexPlan([], changes=["x: add"]))
     monkeypatch.setattr(cli_mod, "check_save_index", lambda *a: {
         "mismatched": [], "orphaned": [], "reusable": [], "duplicates": ["0003 is unused"],
     })

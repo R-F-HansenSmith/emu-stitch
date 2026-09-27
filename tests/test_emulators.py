@@ -288,3 +288,92 @@ def test_cemu_emudeck_path_only_used_when_roms_wiiu_exists(tmp_path, monkeypatch
     (emu_dir / "roms" / "wiiu").mkdir(parents=True)
     assert emulators_mod.cemu_save_paths(str(emu_dir))[-1] == str(emu_dir / "roms/wiiu/mlc01/usr/save")
 
+
+
+class TestRyujinxIndexRouting:
+    """The save index is swapped with the profile, like the saves themselves."""
+
+    def _ryujinx(self, tmp_path, monkeypatch, running=False):
+        import struct
+        from emu_stitch.ryujinx import new_user_value, serialize_index
+        import emu_stitch.ryujinx as ryu_mod
+        ryu = tmp_path / "Ryujinx"
+        key_a = struct.pack("<Q", 0x0100000000010000).ljust(0x40, b"\x00")
+        for slot in ("0", "1"):
+            d = ryu / "bis" / "system" / "save" / "8000000000000000" / slot
+            d.mkdir(parents=True)
+            (d / "imkvdb.arc").write_bytes(serialize_index([(key_a, new_user_value(1))]))
+            (d / "lastPublishedId").write_bytes(struct.pack("<Q", 1))
+        monkeypatch.setattr(emulators_mod, "ryujinx_config_dirs", lambda: [str(ryu)])
+        monkeypatch.setattr(emulators_mod, "cemu_save_paths", lambda emu_dir=None: [])
+        monkeypatch.setattr(emulators_mod, "ryujinx_running", lambda: running)
+        monkeypatch.setattr(ryu_mod, "machine_range_base", lambda d: 0x1234 << 32)
+        return ryu
+
+    def _activate(self, emu_dir, name):
+        profile = emu_dir / "saves_by_user" / name
+        profile.mkdir(parents=True, exist_ok=True)
+        link = emu_dir / "saves"
+        if link.is_symlink():
+            link.unlink()
+        os.symlink(str(profile), str(link))
+        return profile
+
+    def test_index_moves_into_profile_and_swaps_on_switch(self, tmp_path, monkeypatch):
+        ryu = self._ryujinx(tmp_path, monkeypatch)
+        index_link = ryu / "bis" / "system" / "save" / "8000000000000000"
+        original = (index_link / "0" / "imkvdb.arc").read_bytes()
+        emu_dir = tmp_path / "Emulation"
+
+        alice = self._activate(emu_dir, "alice")
+        emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "alice")
+        assert index_link.is_symlink()
+        assert os.path.realpath(str(index_link)) == str(alice / "ryujinx" / "saveIndex")
+        assert (alice / "ryujinx" / "saveIndex" / "0" / "imkvdb.arc").read_bytes() == original
+        # Ryujinx's own copy is kept as a backup, never deleted.
+        assert any(p.name.startswith("8000000000000000.bak-") for p in index_link.parent.iterdir())
+
+        bob = self._activate(emu_dir, "bob")
+        emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "bob")
+        assert os.path.realpath(str(index_link)) == str(bob / "ryujinx" / "saveIndex")
+        # A new profile starts from a copy of the previous index.
+        assert (bob / "ryujinx" / "saveIndex" / "0" / "imkvdb.arc").read_bytes() == original
+
+        emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "bob")
+        self._activate(emu_dir, "alice")
+        emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "alice")
+        assert os.path.realpath(str(index_link)) == str(alice / "ryujinx" / "saveIndex")
+
+    def test_counter_is_moved_onto_this_machines_range(self, tmp_path, monkeypatch):
+        import struct
+        self._ryujinx(tmp_path, monkeypatch)
+        emu_dir = tmp_path / "Emulation"
+        alice = self._activate(emu_dir, "alice")
+
+        messages = emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "alice")
+
+        counter = (alice / "ryujinx" / "saveIndex" / "0" / "lastPublishedId").read_bytes()
+        assert struct.unpack("<Q", counter)[0] == 0x1234 << 32
+        assert any("numbered from" in m for m in messages)
+
+    def test_nothing_is_routed_before_ryujinx_creates_its_index(self, tmp_path, monkeypatch):
+        ryu = self._ryujinx(tmp_path, monkeypatch)
+        shutil.rmtree(ryu / "bis" / "system" / "save" / "8000000000000000")
+        emu_dir = tmp_path / "Emulation"
+        alice = self._activate(emu_dir, "alice")
+
+        emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "alice")
+
+        assert not (ryu / "bis" / "system" / "save" / "8000000000000000").exists()
+        assert not (alice / "ryujinx" / "saveIndex").exists()
+
+    def test_nothing_ryujinx_is_touched_while_it_runs(self, tmp_path, monkeypatch):
+        ryu = self._ryujinx(tmp_path, monkeypatch, running=True)
+        emu_dir = tmp_path / "Emulation"
+        self._activate(emu_dir, "alice")
+
+        messages = emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "alice")
+
+        assert "Ryujinx is running" in messages[0]
+        assert not (ryu / "bis" / "system" / "save" / "8000000000000000").is_symlink()
+        assert not (ryu / "bis" / "user" / "save").exists()

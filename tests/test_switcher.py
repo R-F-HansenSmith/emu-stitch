@@ -180,7 +180,7 @@ def test_setup_systemd_watcher_creates_unit_files(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
 
     from emu_stitch.switcher import setup_systemd_watcher
-    ok, msg = setup_systemd_watcher()
+    ok, msg = setup_systemd_watcher("/home/deck/Emulation")
 
     assert ok is True
     path_file = fake_home / ".config" / "systemd" / "user" / "emu-stitch-watcher.path"
@@ -189,7 +189,9 @@ def test_setup_systemd_watcher_creates_unit_files(tmp_path, monkeypatch):
     assert path_file.exists()
     assert service_file.exists()
     assert "loginusers.vdf" in path_file.read_text()
-    assert "emu-stitch switch" in service_file.read_text()
+    assert "emu-stitch --dir /home/deck/Emulation switch" in service_file.read_text()
+    assert "PathChanged=/home/deck/Emulation/saves/ryujinx/saves" in path_file.read_text()
+    assert "PathChanged=/home/deck/Emulation/saves/ryujinx/saveIndex/0" in path_file.read_text()
 
 
 def test_setup_systemd_watcher_survives_a_hung_systemctl(tmp_path, monkeypatch):
@@ -210,7 +212,7 @@ def test_setup_systemd_watcher_survives_a_hung_systemctl(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     from emu_stitch.switcher import setup_systemd_watcher
-    ok, msg = setup_systemd_watcher()
+    ok, msg = setup_systemd_watcher("/home/deck/Emulation")
 
     assert ok is False
     assert captured["timeout"] is not None
@@ -333,10 +335,10 @@ def test_setup_systemd_watcher_uses_installed_binary_and_detected_steam_root(tmp
     (flatpak_steam / "config" / "loginusers.vdf").write_text("")
 
     from emu_stitch.switcher import setup_systemd_watcher
-    setup_systemd_watcher()
+    setup_systemd_watcher("/home/my games/Emulation")
 
     units = fake_home / ".config" / "systemd" / "user"
-    assert 'ExecStart="/opt/my tools/emu-stitch" switch' in (units / "emu-stitch-watcher.service").read_text()
+    assert 'ExecStart="/opt/my tools/emu-stitch" --dir "/home/my games/Emulation" switch' in (units / "emu-stitch-watcher.service").read_text()
     assert f"PathModified={flatpak_steam}/config/loginusers.vdf" in (units / "emu-stitch-watcher.path").read_text()
 
 
@@ -349,17 +351,22 @@ def test_quote_exec_arg(path, expected):
     assert switcher_mod.quote_exec_arg(path) == expected
 
 
-def test_run_switch_reindexes_ryujinx_only_when_enabled(tmp_path, fake_steam_user, monkeypatch):
-    calls = []
-    monkeypatch.setattr(switcher_mod, "ryujinx_config_dirs", lambda: ["/fake/Ryujinx"])
-    monkeypatch.setattr(switcher_mod, "auto_reindex", lambda *a: calls.append(a) or ["updated"])
+def test_run_switch_prints_emulator_messages(tmp_path, fake_steam_user, monkeypatch, capsys):
+    monkeypatch.setattr(switcher_mod, "configure_all_emulators", lambda *a: ["Ryujinx is running, ..."])
     emu_dir = tmp_path / "Emulation"
     emu_dir.mkdir()
 
-    monkeypatch.setattr(switcher_mod, "get_ryujinx_auto_reindex", lambda: False)
     run_switch(str(emu_dir))
-    assert calls == []
 
-    monkeypatch.setattr(switcher_mod, "get_ryujinx_auto_reindex", lambda: True)
-    _, target = run_switch(str(emu_dir))
-    assert calls == [(target, ["/fake/Ryujinx"], [target])]
+    assert "Ryujinx is running" in capsys.readouterr().out
+
+
+def test_watcher_status_detects_missing_outdated_and_current(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 0, "", ""))
+    from emu_stitch.switcher import setup_systemd_watcher, watcher_status
+
+    assert watcher_status("/e") == "missing"
+    setup_systemd_watcher("/e")
+    assert watcher_status("/e") == "current"
+    assert watcher_status("/other/Emulation") == "outdated"

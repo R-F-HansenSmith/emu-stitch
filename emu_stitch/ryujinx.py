@@ -7,9 +7,22 @@ archive (imkvdb.arc) inside the 8000000000000000 system save, to get the
 numbered folder to open. That index belongs to the Ryujinx install, not to a
 profile, so folders switched or synced in by emu-stitch can disagree with it.
 
+emu-stitch keeps that index consistent by treating it like the saves:
+
+- Each profile has its own copy (ryujinx/saveIndex), symlinked into place
+  on switch, so a profile's saves and index always travel together.
+- Each machine numbers new saves from its own range. The counter file
+  (lastPublishedId) is excluded from Syncthing, so two machines can never
+  give the same folder number to different games.
+- If both machines add saves while apart, Syncthing keeps both copies of
+  the index. Because numbers never collide, the copies can simply be
+  merged; a save started on both machines resolves to the most recently
+  played folder.
+
 Each save folder's ExtraData file starts with the exact 0x40-byte key the
 index uses for it (the SaveDataAttribute: title ID, user ID, save type, ...),
-so the index can be rebuilt from the active profile's folders alone.
+so the index can also be rebuilt from the folders alone (`ryujinx-reindex`,
+a manual repair tool).
 
 Archive format:  "IMKV" | u32 reserved | u32 entry count, then per entry
                  "IMEN" | u32 key size | u32 value size | key | value
@@ -19,13 +32,24 @@ Value (0x40):    u64 save ID | u64 size | u64 reserved | u8 space ID | u8 state 
 from __future__ import annotations
 
 import os
+import re
+import socket
 import shutil
 import struct
+import hashlib
 import datetime
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 INDEX_SAVE = os.path.join("bis", "system", "save", "8000000000000000")
+# Where each profile keeps its own copy of the index save.
+PROFILE_INDEX = os.path.join("ryujinx", "saveIndex")
+COUNTER_FILE = "lastPublishedId"
+INDEX_SLOTS = ("0", "1")
+# Each machine allocates new save IDs from its own 2^32-wide range.
+RANGE_BITS = 32
+MACHINE_ID_PATHS = ("/etc/machine-id", "/var/lib/dbus/machine-id")
+CONFLICT_RE = re.compile(r"^imkvdb\.sync-conflict-.*\.arc$")
 KEY_SIZE = 0x40
 VALUE_SIZE = 0x40
 SPACE_SYSTEM = 0
@@ -34,6 +58,7 @@ SPACE_USER = 1
 SYSTEM_SAVE_ID_MIN = 0x8000000000000000
 # Index backups are small, pure copies that can be rebuilt at any time.
 INDEX_BACKUPS_KEPT = 5
+REINDEX_BACKUP_SUFFIX = ".reindex-bak-"
 PROC_DIR = "/proc"
 
 Entry = Tuple[bytes, bytes]
@@ -188,6 +213,169 @@ def scan_profile_saves(profile_dir: str) -> List[SaveFolder]:
     return folders
 
 
+def index_present(index_dir: str) -> bool:
+    """Whether `index_dir` (an 8000000000000000 save) holds an index."""
+    return any(os.path.isfile(os.path.join(index_dir, slot, "imkvdb.arc")) for slot in INDEX_SLOTS)
+
+
+# ---------------------------------------------------------------------------
+# Per-machine save numbering
+# ---------------------------------------------------------------------------
+
+def machine_range_base(ryujinx_dir: str) -> int:
+    """
+    First save ID of this machine's own numbering range for `ryujinx_dir`.
+
+    The range number comes from /etc/machine-id plus the Ryujinx install
+    path (so native and Flatpak Ryujinx on one machine differ too), and is
+    in 1..2^31-1, keeping every ID below the system-save range. Range 0
+    (IDs below 2^32) is where Ryujinx numbered saves before emu-stitch
+    managed it: those stay valid, but are never handed out again.
+    """
+    machine_id = ""
+    for path in MACHINE_ID_PATHS:
+        try:
+            with open(path) as f:
+                machine_id = f.read().strip()
+        except OSError:
+            continue
+        if machine_id:
+            break
+    seed = f"{machine_id or socket.gethostname()}\0{os.path.realpath(ryujinx_dir)}"
+    n = int(hashlib.sha256(seed.encode()).hexdigest(), 16) % ((1 << 31) - 1) + 1
+    return n << RANGE_BITS
+
+
+def same_range(a: int, b: int) -> bool:
+    return a >> RANGE_BITS == b >> RANGE_BITS
+
+
+def read_counter(slot_dir: str) -> Optional[int]:
+    try:
+        with open(os.path.join(slot_dir, COUNTER_FILE), "rb") as f:
+            raw = f.read(8)
+    except OSError:
+        return None
+    return struct.unpack("<Q", raw)[0] if len(raw) == 8 else None
+
+
+def ensure_counter(index_dir: str, profile_dir: str, base: int) -> Optional[str]:
+    """
+    Make sure Ryujinx hands out new save IDs from this machine's range:
+    set lastPublishedId to at least `base`, and past every folder in the
+    profile that is already in this range. Counters already in range are
+    only ever raised. Returns a message the first time a profile is moved
+    onto this machine's range, else None.
+    """
+    own = [f.save_id for f in scan_profile_saves(profile_dir) if same_range(f.save_id, base)]
+    floor = max([base] + own)
+    moved = False
+    for slot in INDEX_SLOTS:
+        slot_dir = os.path.join(index_dir, slot)
+        if not os.path.isdir(slot_dir):
+            continue
+        current = read_counter(slot_dir)
+        in_range = current is not None and same_range(current, base)
+        if in_range and current >= floor:
+            continue
+        _atomic_write(os.path.join(slot_dir, COUNTER_FILE), struct.pack("<Q", max(floor, current) if in_range else floor))
+        moved = moved or not in_range
+    if moved:
+        return f"Ryujinx: new saves in this profile on this machine will be numbered from {floor + 1:016x}"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Merging Syncthing conflict copies of the index
+# ---------------------------------------------------------------------------
+
+def merge_index_versions(versions: List[List[Entry]], folders: List["SaveFolder"]) -> Tuple[List[Entry], List[str]]:
+    """
+    Union of several versions of an index. Keys present in several versions
+    with different values are resolved deterministically, so every machine
+    merging the same versions gets the same result: for user saves, prefer
+    a folder that exists, then the most recently modified one, then the
+    higher ID.
+    """
+    mtime_by_id = {f.save_id: f.mtime for f in folders}
+    values_by_key: Dict[bytes, List[bytes]] = {}
+    for entries in versions:
+        for key, value in entries:
+            bucket = values_by_key.setdefault(key, [])
+            if value not in bucket:
+                bucket.append(value)
+
+    merged: List[Entry] = []
+    notes: List[str] = []
+    for key, values in values_by_key.items():
+        if len(values) == 1:
+            merged.append((key, values[0]))
+            continue
+        if all(value_space_id(v) == SPACE_USER for v in values):
+            def rank(v: bytes) -> Tuple[bool, float, int]:
+                sid = value_save_id(v)
+                return sid in mtime_by_id, mtime_by_id.get(sid, 0.0), sid
+            chosen = max(values, key=rank)
+            others = ", ".join(f"{value_save_id(v):016x}" for v in values if v != chosen)
+            notes.append(
+                f"{describe_key(key)} was saved on two machines while they weren't syncing; using "
+                f"{value_save_id(chosen):016x} (most recently played). Kept on disk, unused: {others}"
+            )
+        else:
+            chosen = max(values)
+        merged.append((key, chosen))
+    return merged, notes
+
+
+def merge_index_conflicts(index_dir: str, profile_dir: str, backup_root: str) -> List[str]:
+    """
+    If Syncthing left conflict copies of imkvdb.arc in `index_dir`, merge
+    them into the index (see merge_index_versions), write it to both slots,
+    and move the conflict copies to `backup_root`. Returns messages.
+    """
+    slots = [os.path.join(index_dir, s) for s in INDEX_SLOTS if os.path.isdir(os.path.join(index_dir, s))]
+    conflicts = [os.path.join(d, f) for d in slots for f in sorted(os.listdir(d)) if CONFLICT_RE.match(f)]
+    if not conflicts:
+        return []
+
+    versions: List[List[Entry]] = []
+    for path in [os.path.join(d, "imkvdb.arc") for d in slots] + conflicts:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "rb") as f:
+                versions.append(parse_index(f.read()))
+        except (OSError, ValueError) as e:
+            return [f"Ryujinx: couldn't read {path} ({e}); save index conflicts left for manual review"]
+
+    merged, notes = merge_index_versions(versions, scan_profile_saves(profile_dir))
+    data = serialize_index(merged)
+    for d in slots:
+        _atomic_write(os.path.join(d, "imkvdb.arc"), data)
+
+    dest = os.path.join(backup_root, datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+    os.makedirs(dest, exist_ok=True)
+    for path in conflicts:
+        slot = os.path.basename(os.path.dirname(path))
+        shutil.move(path, os.path.join(dest, f"{slot}-{os.path.basename(path)}"))
+
+    return [f"Ryujinx: merged {len(conflicts)} conflicting copy(ies) of this profile's save index "
+            f"(originals kept in {dest})"] + notes
+
+
+def maintain_profile_index(ryujinx_dir: str, profile_dir: str, backup_root: str) -> List[str]:
+    """Merge any index conflicts, then pin the counter to this machine's
+    range. Ryujinx must not be running. Returns messages."""
+    index_dir = os.path.join(profile_dir, PROFILE_INDEX)
+    if not index_present(index_dir):
+        return []
+    messages = merge_index_conflicts(index_dir, profile_dir, backup_root)
+    msg = ensure_counter(index_dir, profile_dir, machine_range_base(ryujinx_dir))
+    if msg:
+        messages.append(msg)
+    return messages
+
+
 # ---------------------------------------------------------------------------
 # Read-only consistency check (used by `audit`)
 # ---------------------------------------------------------------------------
@@ -200,8 +388,8 @@ def check_save_index(profile_dir: str, ryujinx_dir: str) -> Dict[str, List[str]]
       so Ryujinx would hand this folder's data to the wrong game.
     - "orphaned": neither the folder nor its save is in the index, so
       Ryujinx will never load it.
-    - "reusable": the folder's number is above the index's last issued ID,
-      so the next new save Ryujinx creates may be given the same number.
+    - "reusable": the folder's number is in the same range as, and above,
+      the index's last issued ID, so a new save may be given that number.
     - "duplicates" (informational): the save is indexed, but to a
       different folder, so this copy is unused.
 
@@ -234,7 +422,7 @@ def check_save_index(profile_dir: str, ryujinx_dir: str) -> Dict[str, List[str]]
             problems["mismatched"].append(
                 f"{folder.name} holds {label}, but Ryujinx maps it to {describe_key(indexed_key)}"
             )
-        if folder.save_id > last_published:
+        if same_range(folder.save_id, last_published) and folder.save_id > last_published:
             problems["reusable"].append(folder.name)
     return problems
 
@@ -246,7 +434,6 @@ def check_save_index(profile_dir: str, ryujinx_dir: str) -> Dict[str, List[str]]
 @dataclass
 class ReindexPlan:
     entries: List[Entry]
-    last_published: int
     changes: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
@@ -255,7 +442,7 @@ class ReindexPlan:
         return bool(self.changes)
 
 
-def plan_reindex(profile_dir: str, ryujinx_dir: str, all_profile_dirs: Optional[List[str]] = None) -> Optional[ReindexPlan]:
+def plan_reindex(profile_dir: str, ryujinx_dir: str) -> Optional[ReindexPlan]:
     """
     Work out the index that exactly matches `profile_dir`'s save folders:
 
@@ -264,26 +451,24 @@ def plan_reindex(profile_dir: str, ryujinx_dir: str, all_profile_dirs: Optional[
       key recorded in its own ExtraData.
     - If several folders hold the same save (same key), the most recently
       modified one wins; the others are left on disk, untouched.
-    - User entries for saves this profile doesn't have are kept, because
-      other profiles on this machine rely on them, unless their number is
-      taken by a different save in this profile.
-    - lastPublishedId never goes down, and is raised past every folder
-      number in this profile and in `all_profile_dirs`, so new saves never
-      reuse an existing number.
+    - User entries for saves this profile doesn't have are kept, unless
+      their number is taken by a different save in this profile.
+
+    The save-ID counter is left alone; ensure_counter manages it.
 
     Returns None if Ryujinx has no index yet (it creates one on first run).
     """
     loaded = load_index(ryujinx_dir)
     if loaded is None:
         return None
-    entries, last_published = loaded
+    entries, _ = loaded
 
     kept = [(k, v) for k, v in entries if value_space_id(v) != SPACE_USER]
     kept_ids = {value_save_id(v) for _, v in kept}
     current: Dict[bytes, bytes] = {k: v for k, v in entries if value_space_id(v) == SPACE_USER}
 
     folders = scan_profile_saves(profile_dir)
-    plan = ReindexPlan(entries=list(kept), last_published=last_published)
+    plan = ReindexPlan(entries=list(kept))
 
     by_key: Dict[bytes, List[SaveFolder]] = {}
     for folder in folders:
@@ -325,15 +510,6 @@ def plan_reindex(profile_dir: str, ryujinx_dir: str, all_profile_dirs: Optional[
         else:
             plan.entries.append((key, value))
 
-    other_folders = [
-        f for d in (all_profile_dirs or []) if os.path.realpath(d) != os.path.realpath(profile_dir)
-        for f in scan_profile_saves(d)
-    ]
-    highest = max((f.save_id for f in folders + other_folders), default=0)
-    if highest > last_published:
-        plan.last_published = highest
-        plan.changes.append(f"last issued save ID: {last_published:016x} -> {highest:016x}")
-
     return plan
 
 
@@ -347,18 +523,19 @@ def _atomic_write(path: str, data: bytes) -> None:
 
 
 def apply_reindex(ryujinx_dir: str, plan: ReindexPlan) -> str:
-    """Back up the whole index save, then write the planned index to both
-    of its slots. Returns the backup path."""
+    """Back up the whole index save (machine-locally, next to Ryujinx's own
+    copy), then write the planned index to both of its slots. Returns the
+    backup path."""
     base = os.path.join(ryujinx_dir, INDEX_SAVE)
     data = serialize_index(plan.entries)
     if sorted(parse_index(data)) != sorted(plan.entries):
         raise RuntimeError("internal error: rebuilt index does not round-trip")
 
     stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-    backup = f"{base}.bak-{stamp}"
+    backup = f"{base}{REINDEX_BACKUP_SUFFIX}{stamp}"
     n = 1
     while os.path.lexists(backup):
-        backup = f"{base}.bak-{stamp}-{n}"
+        backup = f"{base}{REINDEX_BACKUP_SUFFIX}{stamp}-{n}"
         n += 1
     shutil.copytree(base, backup, symlinks=True)
 
@@ -367,14 +544,13 @@ def apply_reindex(ryujinx_dir: str, plan: ReindexPlan) -> str:
         if not os.path.isdir(slot_dir):
             continue
         _atomic_write(os.path.join(slot_dir, "imkvdb.arc"), data)
-        _atomic_write(os.path.join(slot_dir, "lastPublishedId"), struct.pack("<Q", plan.last_published))
 
     _prune_index_backups(base)
     return backup
 
 
 def _prune_index_backups(base: str) -> None:
-    parent, prefix = os.path.dirname(base), os.path.basename(base) + ".bak-"
+    parent, prefix = os.path.dirname(base), os.path.basename(base) + REINDEX_BACKUP_SUFFIX
     backups = sorted(
         (e for e in os.listdir(parent) if e.startswith(prefix)),
         key=lambda e: os.path.getmtime(os.path.join(parent, e)),
@@ -383,32 +559,14 @@ def _prune_index_backups(base: str) -> None:
         shutil.rmtree(os.path.join(parent, name), ignore_errors=True)
 
 
-def auto_reindex(profile_dir: str, ryujinx_dirs: List[str], all_profile_dirs: List[str]) -> List[str]:
-    """Non-interactive reindex used by `switch`. Returns messages to show."""
-    if not ryujinx_dirs:
-        return []
-    if ryujinx_running():
-        return ["Ryujinx is running, so its save index was not updated for this profile. "
-                "Close it and run 'emu-stitch ryujinx-reindex'."]
-    messages = []
-    for ryujinx_dir in ryujinx_dirs:
-        plan = plan_reindex(profile_dir, ryujinx_dir, all_profile_dirs)
-        if plan is None or not plan.has_changes:
-            continue
-        apply_reindex(ryujinx_dir, plan)
-        messages.append(f"Ryujinx save index updated for this profile ({len(plan.changes)} change(s)) in {ryujinx_dir}")
-        messages += plan.notes
-    return messages
-
-
 # ---------------------------------------------------------------------------
 # Process detection
 # ---------------------------------------------------------------------------
 
 def ryujinx_running() -> bool:
-    """Whether a Ryujinx process is running. Ryujinx keeps the index in
-    memory and writes it back on exit, so it must not be running while the
-    index is rebuilt."""
+    """Whether a Ryujinx process is running. Ryujinx keeps its save index in
+    memory and writes it back on exit, so emu-stitch must not relink its
+    saves or touch the index while it runs."""
     own_pid = str(os.getpid())
     try:
         pids = [p for p in os.listdir(PROC_DIR) if p.isdigit() and p != own_pid]

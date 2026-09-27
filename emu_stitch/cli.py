@@ -16,24 +16,32 @@ from rich.table import Table
 
 from .config import (
     DEFAULT_BACKUP_RETENTION,
-    get_ryujinx_auto_reindex,
     is_configured,
     set_backup_retention,
-    set_ryujinx_auto_reindex,
 )
 from . import __version__
 from .detector import detect_emulation_dir, detect_active_steam_user
 from .switcher import (
     run_switch,
     setup_systemd_watcher,
-    watcher_installed,
+    watcher_status,
     list_profiles,
     emu_stitch_executable,
     quote_exec_arg,
 )
 from .fstab import audit_mount_permissions
 from .emulators import audit_emulator_saves, detect_installed_emulators, ryujinx_config_dirs
-from .ryujinx import apply_reindex, check_save_index, plan_reindex, ryujinx_running
+from .ryujinx import (
+    INDEX_SAVE,
+    PROFILE_INDEX,
+    apply_reindex,
+    check_save_index,
+    ensure_counter,
+    index_present,
+    machine_range_base,
+    plan_reindex,
+    ryujinx_running,
+)
 from .syncthing import (
     check_syncthing_installed,
     ensure_syncthing_service,
@@ -161,7 +169,7 @@ def cmd_setup(args):
     autostart_dir = os.path.expanduser("~/.config/autostart")
     desktop_file = os.path.join(autostart_dir, "emu_stitch.desktop")
     autostart_done = os.path.exists(desktop_file)
-    watcher_done = watcher_installed()
+    watcher_state = watcher_status(emu_dir)
 
     st_active = False
     if syncthing_available:
@@ -180,12 +188,15 @@ def cmd_setup(args):
         )
 
     do_watcher = False
-    if watcher_done:
+    if watcher_state == "current":
         print_success("Steam account watcher: already configured")
+    elif watcher_state == "outdated":
+        print_success("Steam account watcher: installed (will be updated to this version)")
+        do_watcher = True
     else:
         do_watcher = prompt_yes_no(
-            "Switch save profiles automatically whenever the Steam account changes "
-            "(installs a systemd user unit)?",
+            "Switch save profiles automatically whenever the Steam account changes, and pick up "
+            "Ryujinx saves synced from other machines (installs a systemd user unit)?",
             default=True, auto_yes=auto_yes,
         )
 
@@ -220,7 +231,8 @@ def cmd_setup(args):
     if not autostart_done and do_autostart:
         changes.append(f"Create autostart entry: {desktop_file}")
     if do_watcher:
-        changes.append("Install and enable systemd user units: emu-stitch-watcher.path / .service")
+        verb = "Update" if watcher_state == "outdated" else "Install and enable"
+        changes.append(f"{verb} systemd user units: emu-stitch-watcher.path / .service")
     if do_syncthing_enable:
         changes.append("Enable and start syncthing.service")
     if do_syncthing_register:
@@ -249,14 +261,14 @@ def cmd_setup(args):
     print_success(f"Active save profile: {profile} ({path})")
 
     if not autostart_done and do_autostart:
-        exec_bin = quote_exec_arg(emu_stitch_executable())
+        exec_line = f"{quote_exec_arg(emu_stitch_executable())} --dir {quote_exec_arg(emu_dir)} switch"
         os.makedirs(autostart_dir, exist_ok=True)
         with open(desktop_file, "w") as f:
-            f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={exec_bin} switch\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
+            f.write(f"[Desktop Entry]\nType=Application\nName=emu-stitch Save Switcher\nExec={exec_line}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n")
         print_success(f"Autostart entry created: {desktop_file}")
 
     if do_watcher:
-        w_ok, w_msg = setup_systemd_watcher()
+        w_ok, w_msg = setup_systemd_watcher(emu_dir)
         if w_ok:
             print_success(f"Steam User Watcher: {w_msg}")
         else:
@@ -275,6 +287,14 @@ def cmd_setup(args):
             print_success(f"Syncthing folder: {st_msg}")
         else:
             print_warning(f"Syncthing folder: {st_msg}")
+
+    for ryujinx_dir in ryujinx_config_dirs():
+        if not index_present(os.path.join(ryujinx_dir, INDEX_SAVE)):
+            print_warning(
+                f"Ryujinx ({ryujinx_dir}) hasn't created its save index yet. Before playing: launch Ryujinx "
+                "once without starting a game, close it, then run 'emu-stitch switch'. That lets emu-stitch "
+                "give this machine its own save numbers before any saves exist."
+            )
 
     console.rule("[bold green]Setup Complete![/]", style="green")
     cprint("Run [cyan]emu-stitch audit[/] to view your system health and device status.")
@@ -483,15 +503,6 @@ def cmd_ryujinx_reindex(args):
     print_banner()
     console.rule("[bold]Rebuild Ryujinx Save Index[/]")
 
-    auto = getattr(args, "auto", None)
-    if auto == "off":
-        set_ryujinx_auto_reindex(False)
-        print_success("Automatic reindex on profile switch: disabled")
-        return
-    if auto == "on":
-        set_ryujinx_auto_reindex(True)
-        print_success("Automatic reindex on profile switch: enabled")
-
     if not os.path.islink(active_link):
         print_error("No active save profile yet. Run 'emu-stitch switch' first.")
         sys.exit(1)
@@ -508,7 +519,10 @@ def cmd_ryujinx_reindex(args):
 
     for ryujinx_dir in ryujinx_dirs:
         cprint(f"\n[bold]{esc(ryujinx_dir)}[/]")
-        plan = plan_reindex(profile_dir, ryujinx_dir, [p["path"] for p in list_profiles(emu_dir)])
+        if os.path.realpath(os.path.join(ryujinx_dir, INDEX_SAVE)) != os.path.realpath(os.path.join(profile_dir, PROFILE_INDEX)):
+            print_warning("Ryujinx's save index isn't routed into this profile yet. Run 'emu-stitch switch' first. Skipping.")
+            continue
+        plan = plan_reindex(profile_dir, ryujinx_dir)
         if plan is None:
             print_warning("No save index found (Ryujinx creates it on first launch). Skipping.")
             continue
@@ -526,18 +540,14 @@ def cmd_ryujinx_reindex(args):
             continue
 
         backup = apply_reindex(ryujinx_dir, plan)
+        ensure_counter(os.path.join(profile_dir, PROFILE_INDEX), profile_dir, machine_range_base(ryujinx_dir))
         print_success(f"Save index rebuilt. Previous index backed up to: {backup}")
         remaining = check_save_index(profile_dir, ryujinx_dir)
         if any(remaining[k] for k in PROBLEM_KEYS):
             print_warning("Some save folders still can't be indexed; see the notes above.")
 
-    if not get_ryujinx_auto_reindex():
-        print_warning(
-            "The index is shared by every profile on this machine. After switching profiles, run this "
-            "again, or enable it on every switch with: emu-stitch ryujinx-reindex --auto on"
-        )
     cprint("\nLaunch each affected game once and check it loads the progress you expect.")
-    cprint("To undo, restore the backup folder over bis/system/save/8000000000000000 while Ryujinx is closed.")
+    cprint("To undo, close Ryujinx and copy the backup folder's contents over this profile's ryujinx/saveIndex folder.")
 
 
 def main():
@@ -570,13 +580,9 @@ def main():
 
     parser_reindex = subparsers.add_parser(
         "ryujinx-reindex",
-        help="Rebuild Ryujinx's save index from the active profile's save folders (fixes issues shown by audit)",
+        help="Repair tool: rebuild the active profile's Ryujinx save index from its save folders (for issues shown by audit)",
     )
     parser_reindex.add_argument("-y", "--yes", action="store_true", help="Apply without asking for confirmation")
-    parser_reindex.add_argument(
-        "--auto", choices=["on", "off"],
-        help="Also rebuild the index automatically on every profile switch (on), or stop doing so (off)",
-    )
     parser_reindex.set_defaults(func=cmd_ryujinx_reindex)
 
     parser_unpair = subparsers.add_parser("unpair", help="Remove a previously paired remote machine using its Device ID")

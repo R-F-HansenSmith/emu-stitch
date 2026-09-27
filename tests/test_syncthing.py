@@ -203,6 +203,34 @@ class TestGenerateStignore:
         assert "(?d)*.lock" in open(stignore_path).read()
 
 
+    def test_excludes_ryujinx_counter_without_delete_flag(self, tmp_path):
+        """The counter must never sync, and must not be deleted when Ryujinx
+        replaces its folder, so it gets no (?d) prefix."""
+        profile_dir = str(tmp_path / "alice")
+        os.makedirs(profile_dir)
+
+        generate_stignore(profile_dir)
+
+        lines = open(os.path.join(profile_dir, ".stignore")).read().splitlines()
+        assert "/ryujinx/saveIndex/*/lastPublishedId" in lines
+        assert not any("lastPublishedId" in l and l.startswith("(?d)") for l in lines)
+
+    def test_keeps_user_lines_and_is_idempotent(self, tmp_path):
+        profile_dir = str(tmp_path / "alice")
+        os.makedirs(profile_dir)
+        stignore_path = os.path.join(profile_dir, ".stignore")
+        with open(stignore_path, "w") as f:
+            f.write("// mine\n*.tmp\n")
+
+        generate_stignore(profile_dir)
+        first = open(stignore_path).read()
+        ok, msg = generate_stignore(profile_dir)
+
+        assert first.startswith("// mine\n*.tmp\n")
+        assert open(stignore_path).read() == first
+        assert "up to date" in msg
+
+
 # ---------------------------------------------------------------------------
 # ensure_syncthing_service
 # ---------------------------------------------------------------------------

@@ -368,24 +368,36 @@ def get_paired_devices_status() -> List[Dict[str, object]]:
         return []
 
 
+# Lines every profile's .stignore must contain.
+STIGNORE_LINES = [
+    "(?d)*.lock",
+    # Each machine numbers new Ryujinx saves from its own range, so the
+    # counter must never sync. No (?d): Ryujinx replaces this folder on every
+    # save, and deleting the counter would make it count from 0 again.
+    "/ryujinx/saveIndex/*/lastPublishedId",
+    # Ryujinx's transient commit folders (renamed to 0/ once written).
+    "(?d)/ryujinx/saveIndex/_",
+    "(?d)/ryujinx/saves/*/_",
+]
+
+
 def generate_stignore(profile_dir: str) -> Result:
-    """Generate or update .stignore file to ignore lock files with (?d) delete-prefix."""
+    """Generate or update the profile's .stignore so it contains every line
+    in STIGNORE_LINES, keeping anything the user added."""
     stignore_path = os.path.join(profile_dir, ".stignore")
     try:
+        content = ""
         if os.path.exists(stignore_path):
             with open(stignore_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
-            if "(?d)*.lock" not in content:
-                content = content.replace("*.lock", "(?d)*.lock")
-                if "(?d)*.lock" not in content:
-                    content += "(?d)*.lock\n"
-                with open(stignore_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                return True, f"Updated .stignore with (?d) prefix in {profile_dir}"
-            return True, f".stignore already present in {profile_dir}"
-        else:
-            with open(stignore_path, "w", encoding="utf-8") as f:
-                f.write("(?d)*.lock\n")
-            return True, f"Generated .stignore in {profile_dir}"
+        lines = content.splitlines()
+        # Older versions wrote a bare *.lock; upgrade it in place.
+        lines = ["(?d)*.lock" if line.strip() == "*.lock" else line for line in lines]
+        missing = [line for line in STIGNORE_LINES if line not in lines]
+        if not missing and lines == content.splitlines():
+            return True, f".stignore already up to date in {profile_dir}"
+        with open(stignore_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines + missing) + "\n")
+        return True, f"Updated .stignore in {profile_dir}"
     except Exception as e:
         return False, f"Failed to write .stignore: {e}"

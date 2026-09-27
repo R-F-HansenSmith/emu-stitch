@@ -16,9 +16,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .backups import migrate_to_backup
 from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name, steam_root
-from .config import get_ryujinx_auto_reindex
-from .emulators import configure_all_emulators, ryujinx_config_dirs
-from .ryujinx import auto_reindex
+from .emulators import configure_all_emulators
 from .syncthing import generate_stignore
 
 
@@ -126,15 +124,8 @@ def _run_switch_locked(emu_dir: str, saves_base: str) -> Tuple[str, str]:
         print(f"Active save profile is already set to -> {profile_name}")
 
     # Route emulators & mirror save payloads
-    configure_all_emulators(emu_dir, active_link, profile_name)
-
-    if get_ryujinx_auto_reindex():
-        all_profiles = [
-            os.path.join(saves_base, d) for d in os.listdir(saves_base)
-            if os.path.isdir(os.path.join(saves_base, d))
-        ]
-        for msg in auto_reindex(real_target, ryujinx_config_dirs(), all_profiles):
-            print(msg)
+    for msg in configure_all_emulators(emu_dir, active_link, profile_name) or []:
+        print(msg)
 
     return profile_name, real_target
 
@@ -189,51 +180,76 @@ def quote_exec_arg(arg: str) -> str:
     return '"' + re.sub(r'(["`$\\])', r"\\\1", arg) + '"'
 
 
-def watcher_installed() -> bool:
-    return os.path.exists(os.path.expanduser("~/.config/systemd/user/emu-stitch-watcher.path"))
-
-
-def setup_systemd_watcher() -> Tuple[bool, str]:
-    """Create and enable a systemd user path unit to watch loginusers.vdf for instant profile switching."""
+def _watcher_units(emu_dir: str) -> Dict[str, str]:
+    """{unit file path: contents} for the systemd watcher. It runs `switch`
+    when the Steam account changes, and when Ryujinx save folders or save
+    index files change in the active profile (e.g. synced in from another
+    machine), so new saves are picked up and index conflicts merged."""
     user_systemd_dir = os.path.expanduser("~/.config/systemd/user")
-    os.makedirs(user_systemd_dir, exist_ok=True)
 
-    path_unit = os.path.join(user_systemd_dir, "emu-stitch-watcher.path")
-    service_unit = os.path.join(user_systemd_dir, "emu-stitch-watcher.service")
-    exec_bin = quote_exec_arg(emu_stitch_executable())
-    loginusers_vdf = os.path.join(steam_root(), "config", "loginusers.vdf").replace("%", "%%")
+    def unit_path(path: str) -> str:
+        return path.replace("%", "%%")
 
+    exec_line = f"{quote_exec_arg(emu_stitch_executable())} --dir {quote_exec_arg(emu_dir)} switch"
+    active = os.path.join(emu_dir, "saves", "ryujinx")
+    watched = [
+        f"PathModified={unit_path(os.path.join(steam_root(), 'config', 'loginusers.vdf'))}",
+        f"PathChanged={unit_path(os.path.join(active, 'saves'))}",
+        f"PathChanged={unit_path(os.path.join(active, 'saveIndex', '0'))}",
+        f"PathChanged={unit_path(os.path.join(active, 'saveIndex', '1'))}",
+    ]
     path_content = (
         "[Unit]\n"
-        "Description=Watch Steam loginusers.vdf for active user changes\n\n"
+        "Description=Watch for Steam account changes and synced emulator saves\n\n"
         "[Path]\n"
-        f"PathModified={loginusers_vdf}\n"
-        "Unit=emu-stitch-watcher.service\n\n"
+        + "".join(f"{line}\n" for line in watched)
+        + "Unit=emu-stitch-watcher.service\n\n"
         "[Install]\n"
         "WantedBy=default.target\n"
     )
-
     service_content = (
         "[Unit]\n"
         "Description=emu-stitch automatic save profile switcher\n\n"
         "[Service]\n"
         "Type=oneshot\n"
-        f"ExecStart={exec_bin} switch\n"
+        f"ExecStart={exec_line}\n"
     )
+    return {
+        os.path.join(user_systemd_dir, "emu-stitch-watcher.path"): path_content,
+        os.path.join(user_systemd_dir, "emu-stitch-watcher.service"): service_content,
+    }
 
+
+def watcher_status(emu_dir: str) -> str:
+    """"missing", "outdated" (installed by an older version or for another
+    Emulation directory), or "current"."""
+    units = _watcher_units(emu_dir)
+    if not all(os.path.exists(p) for p in units):
+        return "missing"
+    for path, content in units.items():
+        with open(path) as f:
+            if f.read() != content:
+                return "outdated"
+    return "current"
+
+
+def setup_systemd_watcher(emu_dir: str) -> Tuple[bool, str]:
+    """Create (or update) and enable the systemd user watcher units."""
     try:
-        with open(path_unit, "w") as f:
-            f.write(path_content)
-        with open(service_unit, "w") as f:
-            f.write(service_content)
+        for path, content in _watcher_units(emu_dir).items():
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(content)
 
         subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, timeout=10)
         res = subprocess.run(
             ["systemctl", "--user", "enable", "--now", "emu-stitch-watcher.path"],
             capture_output=True, text=True, timeout=10,
         )
-        if res.returncode == 0:
-            return True, "systemd loginusers.vdf watcher enabled for automatic profile switching on Steam user change."
-        return False, f"systemctl failed: {res.stderr.strip()}"
+        if res.returncode != 0:
+            return False, f"systemctl failed: {res.stderr.strip()}"
+        # An already-running path unit keeps its old watches until restarted.
+        subprocess.run(["systemctl", "--user", "restart", "emu-stitch-watcher.path"], capture_output=True, timeout=10)
+        return True, "watching for Steam account changes and synced Ryujinx saves."
     except Exception as e:
         return False, f"Error configuring systemd watcher: {e}"

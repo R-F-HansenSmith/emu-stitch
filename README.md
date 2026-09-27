@@ -59,6 +59,18 @@ Once configured, emu-stitch's profile switch covers RetroArch automatically beca
 
 ## Installation
 
+> [!IMPORTANT]
+> **Back up your saves before installing or running `setup`.** emu-stitch never deletes save data on its own, but it does move save folders around. A copy you made yourself is the only thing that protects you from a bug, a mistake, or a bad sync. This saves every location emu-stitch touches (native and Flatpak) into one archive:
+>
+> ```bash
+> tar --ignore-failed-read -czf ~/emu-saves-backup-$(date +%Y%m%d).tar.gz -C ~ \
+>   .config/Ryujinx/bis .var/app/org.ryujinx.Ryujinx/config/Ryujinx/bis \
+>   .local/share/Cemu/mlc01/usr/save .var/app/info.cemu.Cemu/data/Cemu/mlc01/usr/save \
+>   Emulation/saves Emulation/saves_by_user
+> ```
+>
+> "Cannot stat" warnings just mean you don't have that emulator or install type. If your Emulation folder isn't `~/Emulation`, adjust the last line. Keep the archive somewhere Syncthing doesn't sync.
+
 ```bash
 git clone https://github.com/R-F-HansenSmith/emu-stitch.git
 cd emu-stitch
@@ -281,6 +293,8 @@ emu-stitch uses [Syncthing](https://syncthing.net/) to sync saves between machin
 If a Syncthing folder for a profile already exists but points at a different path (for example because your Emulation folder moved to an SD card), emu-stitch won't change it. Update the path in Syncthing's web UI yourself, after checking both locations.
 
 Each user's profile is registered as a separate Syncthing folder (`emustitch-<username>`), so alice and bob's saves sync independently. If you enabled sync in `setup`, profiles created later (a new Steam account on the handheld) are registered on their first `switch` and shared with the same devices as your other profiles.
+
+**Syncing is not a backup.** Syncthing copies deletions and mistakes to every device just as faithfully as it copies progress, so keep separate backups (see [Installation](#installation)).
 
 **A note on availability:** Syncthing only transfers files while both devices are online and connected to each other — there's no store-and-forward relay of your actual data. If your handheld syncs a save while your desktop is asleep, that save just waits until both are online at the same time again.
 

@@ -9,7 +9,7 @@ import os
 import shutil
 import struct
 import subprocess
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .backups import migrate_to_backup
 
@@ -21,14 +21,6 @@ CEMU_GAME_CATEGORY = "00050000"
 
 RYUJINX_FLATPAK = "org.ryujinx.Ryujinx"
 CEMU_FLATPAK = "info.cemu.Cemu"
-
-# Ryujinx (like real Switch firmware) never finds a save by scanning
-# bis/user/save; it looks the game up in a machine-wide save-data index — a
-# key/value store in the 8000000000000000 system save — to get the numbered
-# save folder to open. That index is not part of any emu-stitch profile.
-RYUJINX_INDEX_SAVE = os.path.join("bis", "system", "save", "8000000000000000")
-# Save IDs at or above this are system saves, stored outside bis/user/save.
-_SYSTEM_SAVE_ID_MIN = 0x8000000000000000
 
 
 def is_flatpak_installed(app_id: str) -> bool:
@@ -148,106 +140,6 @@ def _read_ryujinx_save_title_id(save_dir: str) -> Optional[int]:
         if len(header) == 8:
             return struct.unpack("<Q", header)[0]
     return None
-
-
-def _newest_ryujinx_index_slot(ryujinx_dir: str) -> Optional[str]:
-    """The index is committed to two alternating slots (0/ and 1/); the one
-    written most recently is current."""
-    slots = [
-        os.path.join(ryujinx_dir, RYUJINX_INDEX_SAVE, slot)
-        for slot in ("0", "1")
-        if os.path.isfile(os.path.join(ryujinx_dir, RYUJINX_INDEX_SAVE, slot, "imkvdb.arc"))
-    ]
-    if not slots:
-        return None
-    return max(slots, key=lambda d: os.path.getmtime(os.path.join(d, "imkvdb.arc")))
-
-
-def read_ryujinx_save_index(ryujinx_dir: str) -> Optional[Tuple[Dict[int, int], int]]:
-    """
-    Parse Ryujinx's save-data index (imkvdb.arc): an "IMKV" header with an
-    entry count, then "IMEN" entries each holding a 0x40-byte key (a
-    SaveDataAttribute, whose first u64 is the title ID) and a 0x40-byte
-    value (a SaveDataIndexerValue, whose first u64 is the save ID).
-
-    Returns ({user save ID: title ID}, last published save ID), or None if
-    there's no index or it can't be parsed.
-    """
-    slot = _newest_ryujinx_index_slot(ryujinx_dir)
-    if slot is None:
-        return None
-    try:
-        with open(os.path.join(slot, "imkvdb.arc"), "rb") as f:
-            data = f.read()
-        magic, _, count = struct.unpack_from("<4sII", data, 0)
-        if magic != b"IMKV":
-            return None
-        index: Dict[int, int] = {}
-        offset = 12
-        for _ in range(count):
-            entry_magic, key_size, value_size = struct.unpack_from("<4sII", data, offset)
-            if entry_magic != b"IMEN" or key_size < 8 or value_size < 8:
-                return None
-            offset += 12
-            title_id = struct.unpack_from("<Q", data, offset)[0]
-            save_id = struct.unpack_from("<Q", data, offset + key_size)[0]
-            offset += key_size + value_size
-            if save_id < _SYSTEM_SAVE_ID_MIN:
-                index[save_id] = title_id
-        last_published = 0
-        last_path = os.path.join(slot, "lastPublishedId")
-        if os.path.isfile(last_path):
-            with open(last_path, "rb") as f:
-                raw = f.read(8)
-            if len(raw) == 8:
-                last_published = struct.unpack("<Q", raw)[0]
-        return index, last_published
-    except (OSError, struct.error):
-        return None
-
-
-def check_ryujinx_save_index(profile_dir: str, ryujinx_dir: str) -> Dict[str, List[str]]:
-    """
-    Read-only consistency check between a profile's Ryujinx save folders and
-    the machine's save index. Save folders created on another machine, or
-    under a different index, can end up:
-
-    - "mismatched": the index maps that folder number to a *different* game,
-      so Ryujinx will hand this folder's data to the wrong game.
-    - "orphaned": the index doesn't reference the folder at all, so Ryujinx
-      will never load it.
-    - "reusable": the folder's number is above the index's last issued ID,
-      so the next new save Ryujinx creates may be given the same number.
-
-    Returns {"mismatched": [...], "orphaned": [...], "reusable": [...]}
-    of human-readable descriptions (all empty if no index is available).
-    """
-    problems: Dict[str, List[str]] = {"mismatched": [], "orphaned": [], "reusable": []}
-    parsed = read_ryujinx_save_index(ryujinx_dir)
-    saves_dir = os.path.join(profile_dir, "ryujinx", "saves")
-    if parsed is None or not os.path.isdir(saves_dir):
-        return problems
-    index, last_published = parsed
-
-    for name in sorted(os.listdir(saves_dir)):
-        try:
-            save_id = int(name, 16)
-        except ValueError:
-            continue
-        if len(name) != 16 or not os.path.isdir(os.path.join(saves_dir, name)):
-            continue
-        title_id = _read_ryujinx_save_title_id(os.path.join(saves_dir, name))
-        title = f"{title_id:016x}" if title_id is not None else "unknown title"
-        if save_id in index:
-            if title_id is not None and index[save_id] != title_id:
-                problems["mismatched"].append(
-                    f"{name} holds {title}, but Ryujinx maps it to {index[save_id]:016x}"
-                )
-        else:
-            problems["orphaned"].append(f"{name} ({title})")
-        if save_id > last_published:
-            problems["reusable"].append(name)
-    return problems
 
 
 def audit_emulator_saves(active_link: str) -> List[Dict[str, str]]:

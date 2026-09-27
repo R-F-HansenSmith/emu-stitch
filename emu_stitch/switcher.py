@@ -16,7 +16,9 @@ from typing import Dict, List, Optional, Tuple
 
 from .backups import migrate_to_backup
 from .detector import detect_emulation_dir, detect_active_steam_user, sanitize_name, steam_root
-from .emulators import configure_all_emulators
+from .config import get_ryujinx_auto_reindex
+from .emulators import configure_all_emulators, ryujinx_config_dirs
+from .ryujinx import auto_reindex
 from .syncthing import generate_stignore
 
 
@@ -125,6 +127,15 @@ def _run_switch_locked(emu_dir: str, saves_base: str) -> Tuple[str, str]:
 
     # Route emulators & mirror save payloads
     configure_all_emulators(emu_dir, active_link, profile_name)
+
+    if get_ryujinx_auto_reindex():
+        all_profiles = [
+            os.path.join(saves_base, d) for d in os.listdir(saves_base)
+            if os.path.isdir(os.path.join(saves_base, d))
+        ]
+        for msg in auto_reindex(real_target, ryujinx_config_dirs(), all_profiles):
+            print(msg)
+
     return profile_name, real_target
 
 

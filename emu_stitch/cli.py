@@ -14,7 +14,13 @@ from rich.console import Console
 from rich.markup import escape as esc
 from rich.table import Table
 
-from .config import DEFAULT_BACKUP_RETENTION, is_configured, set_backup_retention
+from .config import (
+    DEFAULT_BACKUP_RETENTION,
+    get_ryujinx_auto_reindex,
+    is_configured,
+    set_backup_retention,
+    set_ryujinx_auto_reindex,
+)
 from . import __version__
 from .detector import detect_emulation_dir, detect_active_steam_user
 from .switcher import (
@@ -26,12 +32,8 @@ from .switcher import (
     quote_exec_arg,
 )
 from .fstab import audit_mount_permissions
-from .emulators import (
-    audit_emulator_saves,
-    check_ryujinx_save_index,
-    detect_installed_emulators,
-    ryujinx_config_dirs,
-)
+from .emulators import audit_emulator_saves, detect_installed_emulators, ryujinx_config_dirs
+from .ryujinx import apply_reindex, check_save_index, plan_reindex, ryujinx_running
 from .syncthing import (
     check_syncthing_installed,
     ensure_syncthing_service,
@@ -447,23 +449,95 @@ def cmd_audit(args):
         print_section_header(5, "Syncthing Status")
         cprint(f"   {esc(st_msg)}")
 
+PROBLEM_KEYS = ("mismatched", "orphaned", "reusable")
+
+
 def audit_ryujinx_index(profiles) -> None:
-    """Warn about profile save folders that Ryujinx's machine-wide save
-    index would load for the wrong game, never load, or reuse."""
+    """Check the active profile's Ryujinx save folders against Ryujinx's
+    save index. Only the active profile is checked: the index is shared by
+    the whole machine and is rebuilt for whichever profile is active."""
+    active = next((p for p in profiles if p["active"]), None)
+    if active is None:
+        return
     for ryujinx_dir in ryujinx_config_dirs():
-        for p in profiles:
-            problems = check_ryujinx_save_index(p["path"], ryujinx_dir)
-            if not any(problems.values()):
-                continue
-            print_warning(f"Ryujinx save index mismatch for profile '{p['name']}' ({ryujinx_dir}):")
+        problems = check_save_index(active["path"], ryujinx_dir)
+        if any(problems[k] for k in PROBLEM_KEYS):
+            print_warning(f"Ryujinx save index doesn't match profile '{active['name']}' ({ryujinx_dir}):")
             for line in problems["mismatched"]:
                 cprint(f"     [red]✘ {esc(line)}[/]")
             if problems["orphaned"]:
                 cprint(f"     [yellow]• Not in Ryujinx's save index (won't be loaded): {esc(', '.join(problems['orphaned']))}[/]")
             if problems["reusable"]:
                 cprint(f"     [yellow]• Above Ryujinx's last issued save ID (a new save may reuse the number): {esc(', '.join(problems['reusable']))}[/]")
-            cprint("     [dim]Usually caused by saves created on another machine or under a different Ryujinx install. "
-                   "Back up this profile before playing the affected games. See README: Ryujinx save index.[/]")
+            cprint("     [dim]Usually caused by saves created on another machine or in another profile.[/]")
+            cprint("     [dim]Fix: close Ryujinx and run 'emu-stitch ryujinx-reindex'.[/]")
+        for line in problems["duplicates"]:
+            cprint(f"   [dim]• Ryujinx duplicate save: {esc(line)}[/]")
+
+
+def cmd_ryujinx_reindex(args):
+    """Rebuild Ryujinx's save index from the active profile's save folders."""
+    auto_yes = getattr(args, "yes", False)
+    emu_dir = args.dir or detect_emulation_dir()
+    active_link = os.path.join(emu_dir, "saves")
+    print_banner()
+    console.rule("[bold]Rebuild Ryujinx Save Index[/]")
+
+    auto = getattr(args, "auto", None)
+    if auto == "off":
+        set_ryujinx_auto_reindex(False)
+        print_success("Automatic reindex on profile switch: disabled")
+        return
+    if auto == "on":
+        set_ryujinx_auto_reindex(True)
+        print_success("Automatic reindex on profile switch: enabled")
+
+    if not os.path.islink(active_link):
+        print_error("No active save profile yet. Run 'emu-stitch switch' first.")
+        sys.exit(1)
+    profile_dir = os.path.realpath(active_link)
+    cprint(f"Active profile: [cyan]{esc(os.path.basename(profile_dir))}[/]")
+
+    ryujinx_dirs = ryujinx_config_dirs()
+    if not ryujinx_dirs:
+        print_warning("Ryujinx is not installed; nothing to do.")
+        return
+    if ryujinx_running():
+        print_error("Ryujinx is running. Close it first: it keeps the save index in memory and would overwrite the rebuilt one.")
+        sys.exit(1)
+
+    for ryujinx_dir in ryujinx_dirs:
+        cprint(f"\n[bold]{esc(ryujinx_dir)}[/]")
+        plan = plan_reindex(profile_dir, ryujinx_dir, [p["path"] for p in list_profiles(emu_dir)])
+        if plan is None:
+            print_warning("No save index found (Ryujinx creates it on first launch). Skipping.")
+            continue
+        for note in plan.notes:
+            cprint(f"  [yellow]•[/] {esc(note)}")
+        if not plan.has_changes:
+            print_success("Save index already matches this profile.")
+            continue
+
+        cprint("  Changes to Ryujinx's save index:")
+        for change in plan.changes:
+            cprint(f"    {esc(change)}")
+        if not prompt_yes_no("  Apply these changes? (the current index is backed up first)", default=True, auto_yes=auto_yes):
+            print_warning("Skipped. Nothing was changed.")
+            continue
+
+        backup = apply_reindex(ryujinx_dir, plan)
+        print_success(f"Save index rebuilt. Previous index backed up to: {backup}")
+        remaining = check_save_index(profile_dir, ryujinx_dir)
+        if any(remaining.values()):
+            print_warning("Some save folders still can't be indexed; see the notes above.")
+
+    if not get_ryujinx_auto_reindex():
+        print_warning(
+            "The index is shared by every profile on this machine. After switching profiles, run this "
+            "again, or enable it on every switch with: emu-stitch ryujinx-reindex --auto on"
+        )
+    cprint("\nLaunch each affected game once and check it loads the progress you expect.")
+    cprint("To undo, restore the backup folder over bis/system/save/8000000000000000 while Ryujinx is closed.")
 
 
 def main():
@@ -493,6 +567,17 @@ def main():
         help="Also let this device create new synced folders here without asking (only for machines you fully control)",
     )
     parser_pair.set_defaults(func=cmd_pair)
+
+    parser_reindex = subparsers.add_parser(
+        "ryujinx-reindex",
+        help="Rebuild Ryujinx's save index from the active profile's save folders (fixes issues shown by audit)",
+    )
+    parser_reindex.add_argument("-y", "--yes", action="store_true", help="Apply without asking for confirmation")
+    parser_reindex.add_argument(
+        "--auto", choices=["on", "off"],
+        help="Also rebuild the index automatically on every profile switch (on), or stop doing so (off)",
+    )
+    parser_reindex.set_defaults(func=cmd_ryujinx_reindex)
 
     parser_unpair = subparsers.add_parser("unpair", help="Remove a previously paired remote machine using its Device ID")
     parser_unpair.add_argument("device_id", help="The Syncthing Device ID of the remote machine (8 groups of 7 characters, e.g. XXXXXXX-XXXXXXX-...)")

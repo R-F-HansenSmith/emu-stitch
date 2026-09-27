@@ -27,7 +27,7 @@ It also keeps saves synced across multiple machines via [Syncthing](https://sync
 
 | Emulator | Profile Switching | Save Detection | Notes |
 |---|---|---|---|
-| Ryujinx (Nintendo Switch) | Automatic | Yes | Routes `bis/user/save` and `saveMeta`. Native and Flatpak. See [Ryujinx save index](#ryujinx-save-index) |
+| Ryujinx (Nintendo Switch) | Automatic | Yes | Routes `bis/user/save` and `saveMeta`. Native and Flatpak. Keeps Ryujinx's save index in step with the profile; see [Ryujinx save index](#ryujinx-save-index) |
 | Cemu (Wii U) | Automatic | Yes | Routes `mlc01/usr/save`. Native and Flatpak |
 | RetroArch / Standalone | Manual setup | Yes | See [RetroArch setup](#retroarch--standalone-emulators) |
 
@@ -98,7 +98,8 @@ Everything is per-user; nothing needs root.
 |---|---|---|
 | Save profiles and the active `saves` symlink | `~/Emulation/saves_by_user/`, `~/Emulation/saves` | `switch` / `setup` |
 | Emulator save folders replaced by symlinks (originals kept as `*.bak-*`) | `~/.config/Ryujinx/bis/user/save{,Meta}`, `~/.local/share/Cemu/mlc01/usr/save` (and Flatpak equivalents) | `switch` / `setup` |
-| Settings (backup retention) | `~/.config/emu-stitch/config.json` | `setup` |
+| Settings (backup retention, Ryujinx auto-reindex) | `~/.config/emu-stitch/config.json` | `setup`, `ryujinx-reindex --auto` |
+| Ryujinx save index rebuilt (previous copy kept as `*.bak-*`) | `~/.config/Ryujinx/bis/system/save/8000000000000000` (and Flatpak equivalent) | `ryujinx-reindex`, or `switch` with `--auto on` |
 | Autostart entry | `~/.config/autostart/emu_stitch.desktop` | `setup` (if accepted) |
 | Steam account watcher | `~/.config/systemd/user/emu-stitch-watcher.{path,service}` | `setup` (if accepted) |
 | Syncthing user service enabled | `systemctl --user enable syncthing` | `setup` (if accepted) |
@@ -126,6 +127,8 @@ emu-stitch audit              # Show full system health: saves, sync status, dev
 emu-stitch pair <DEVICE-ID>   # Pair with a remote machine for save sync
 emu-stitch pair --auto-accept <DEVICE-ID>   # ...and trust it to add new synced folders here (see below)
 emu-stitch unpair <DEVICE-ID> # Remove a previously paired remote machine
+emu-stitch ryujinx-reindex    # Rebuild Ryujinx's save index for the active profile (see below)
+emu-stitch ryujinx-reindex --auto on   # ...and do it on every profile switch
 
 emu-stitch --dir /path/to/Emulation setup   # Use a custom Emulation directory
 emu-stitch --debug audit      # Verbose logging and full tracebacks
@@ -227,15 +230,36 @@ Profile names come from your Steam account name. If two Steam accounts would end
 
 ### Ryujinx save index
 
-Ryujinx doesn't find saves by scanning folders. It looks each game up in a machine-wide *save index* (`bis/system/save/8000000000000000`) to get the numbered folder (`0000000000000001`, …) to open. That index belongs to the Ryujinx install, not to a profile, so it is **not** switched or synced by emu-stitch.
+Ryujinx doesn't find saves by scanning folders. It looks each game up in a machine-wide *save index* (`bis/system/save/8000000000000000`) to get the numbered folder (`0000000000000001`, …) to open. That index belongs to the Ryujinx install, not to a profile. So a profile's folders can disagree with it: the same game can have a different folder number in each profile, and each machine numbers saves independently. The result is a game loading the wrong save, or not finding its save at all.
 
-On a single machine this works: every profile shares the same numbering. Across machines, each Ryujinx install numbers saves independently, so a synced folder can end up mapped to a different game, or not be in the index at all. `emu-stitch audit` checks every profile against the local index and warns about:
+`emu-stitch audit` checks the active profile against the index and warns about:
 
 - **mismatched** folders (Ryujinx would hand that data to a different game),
 - **orphaned** folders (Ryujinx will never load them), and
 - folder numbers **above the last ID Ryujinx has issued** (a new save may be given the same number).
 
-If `audit` flags anything, back up the profile before playing the affected games. Cross-machine Ryujinx sync should be treated as **experimental** for now; Cemu saves are stored by title ID and aren't affected.
+To fix them, close Ryujinx and run:
+
+```bash
+emu-stitch ryujinx-reindex
+```
+
+This rebuilds the index from the active profile's own save folders. Each folder's `ExtraData` file records exactly which game and save it belongs to, so nothing is guessed. The command:
+
+- shows every change and asks before applying it, and backs up the current index first (the 5 most recent backups are kept);
+- refuses to run while Ryujinx is open, because Ryujinx would overwrite the rebuilt index when it exits;
+- if a profile has several folders for the same save, uses the most recently modified one. The others are left on disk untouched and listed by `audit`;
+- keeps entries other profiles on this machine rely on, and never lowers the last-issued save ID, so new saves can't reuse an existing folder number in any profile.
+
+Because the index is shared by the whole machine, it has to be rebuilt whenever the active profile changes. To do that automatically on every `switch`:
+
+```bash
+emu-stitch ryujinx-reindex --auto on    # (--auto off to stop)
+```
+
+> **Status: experimental.** The index format and the rebuild are covered by tests, including a byte-for-byte round trip of a real Ryujinx index, but this is still new. Back up `~/Emulation/saves_by_user/` before the first run, then launch each affected game once and check it loads the progress you expect. To undo, restore the backup folder over `bis/system/save/8000000000000000` while Ryujinx is closed.
+
+Cemu saves are stored by title ID and aren't affected.
 
 ---
 

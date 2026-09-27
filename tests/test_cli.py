@@ -565,3 +565,57 @@ def test_main_debug_flag_reraises_with_traceback(monkeypatch):
 
     with pytest.raises(RuntimeError):
         cli_mod.main()
+
+
+class TestRyujinxReindexCommand:
+    def _setup(self, tmp_path, monkeypatch, running=False):
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+        emu_dir = tmp_path / "Emulation"
+        (emu_dir / "saves_by_user" / "alice").mkdir(parents=True)
+        os.symlink(str(emu_dir / "saves_by_user" / "alice"), str(emu_dir / "saves"))
+        monkeypatch.setattr(cli_mod, "detect_emulation_dir", lambda: str(emu_dir))
+        monkeypatch.setattr(cli_mod, "ryujinx_config_dirs", lambda: ["/fake/Ryujinx"])
+        monkeypatch.setattr(cli_mod, "ryujinx_running", lambda: running)
+        applied = []
+        monkeypatch.setattr(cli_mod, "apply_reindex", lambda d, plan: applied.append(d) or "/fake/backup")
+        return applied
+
+    def test_refuses_while_ryujinx_is_running(self, tmp_path, monkeypatch, capsys):
+        applied = self._setup(tmp_path, monkeypatch, running=True)
+        monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "-y"])
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli_mod.main()
+
+        assert exc_info.value.code == 1
+        assert applied == []
+        assert "Close it first" in capsys.readouterr().err
+
+    def test_applies_plan_and_reports_backup(self, tmp_path, monkeypatch, capsys):
+        from emu_stitch.ryujinx import ReindexPlan
+        applied = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: ReindexPlan([], 1, changes=["x: add"]))
+        monkeypatch.setattr(cli_mod, "check_save_index", lambda *a: {"mismatched": [], "orphaned": [], "reusable": [], "duplicates": []})
+        monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "-y"])
+
+        cli_mod.main()
+
+        assert applied == ["/fake/Ryujinx"]
+        out = capsys.readouterr().out
+        assert "/fake/backup" in out
+        assert "--auto on" in out
+
+    def test_auto_toggle_persists_setting(self, tmp_path, monkeypatch):
+        from emu_stitch.config import get_ryujinx_auto_reindex
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(cli_mod, "plan_reindex", lambda *a: None)
+
+        monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "--auto", "on", "-y"])
+        cli_mod.main()
+        assert get_ryujinx_auto_reindex() is True
+
+        monkeypatch.setattr(sys, "argv", ["emu-stitch", "ryujinx-reindex", "--auto", "off"])
+        cli_mod.main()
+        assert get_ryujinx_auto_reindex() is False

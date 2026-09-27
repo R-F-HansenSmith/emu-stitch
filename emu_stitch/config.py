@@ -55,3 +55,14 @@ def set_backup_retention(count: int) -> None:
     config = load_config()
     config["backup_retention"] = count
     save_config(config)
+
+
+def get_ryujinx_auto_reindex() -> bool:
+    """Whether `switch` rebuilds Ryujinx's save index for the new profile."""
+    return load_config().get("ryujinx_auto_reindex") is True
+
+
+def set_ryujinx_auto_reindex(enabled: bool) -> None:
+    config = load_config()
+    config["ryujinx_auto_reindex"] = enabled
+    save_config(config)

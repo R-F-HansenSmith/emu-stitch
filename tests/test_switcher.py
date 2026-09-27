@@ -347,3 +347,19 @@ def test_setup_systemd_watcher_uses_installed_binary_and_detected_steam_root(tmp
 ])
 def test_quote_exec_arg(path, expected):
     assert switcher_mod.quote_exec_arg(path) == expected
+
+
+def test_run_switch_reindexes_ryujinx_only_when_enabled(tmp_path, fake_steam_user, monkeypatch):
+    calls = []
+    monkeypatch.setattr(switcher_mod, "ryujinx_config_dirs", lambda: ["/fake/Ryujinx"])
+    monkeypatch.setattr(switcher_mod, "auto_reindex", lambda *a: calls.append(a) or ["updated"])
+    emu_dir = tmp_path / "Emulation"
+    emu_dir.mkdir()
+
+    monkeypatch.setattr(switcher_mod, "get_ryujinx_auto_reindex", lambda: False)
+    run_switch(str(emu_dir))
+    assert calls == []
+
+    monkeypatch.setattr(switcher_mod, "get_ryujinx_auto_reindex", lambda: True)
+    _, target = run_switch(str(emu_dir))
+    assert calls == [(target, ["/fake/Ryujinx"], [target])]

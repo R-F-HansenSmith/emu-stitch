@@ -14,7 +14,8 @@
 - An existing Syncthing folder pointing at a different path is no longer silently repointed. Previously profiles differing only by case, or a moved Emulation folder, could merge two users' saves.
 - Steam accounts whose names sanitize to the same folder name (or differ only by case) get distinct profiles. Non-Latin names fall back to `User_<steamid>` instead of a shared `Default_User`.
 - `switch` takes a lock, so the autostart entry and watcher can't run it concurrently.
-- New: `audit` checks Ryujinx profiles against Ryujinx's machine-wide save index and warns about save folders that would be loaded for the wrong game, never loaded, or have their number reused.
+- New: `audit` checks the active profile against Ryujinx's machine-wide save index and warns about save folders that would be loaded for the wrong game, never loaded, or have their number reused. Unused duplicate save folders are listed too.
+- New (experimental): `emu-stitch ryujinx-reindex` rebuilds Ryujinx's save index from the active profile's own save folders, after backing up the current index. `--auto on` does this on every profile switch. It refuses to run while Ryujinx is open.
 
 ### Fixes
 - Flatpak Ryujinx and Cemu are routed inside their sandbox directories. Previously they were detected but the native paths were linked instead.

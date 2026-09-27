@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 echo "=== Uninstalling emu-stitch CLI ==="
 
@@ -34,10 +34,10 @@ if [ -f "$DESKTOP_FILE" ]; then
     echo "  Removed: $DESKTOP_FILE"
 fi
 
-# Stop and remove systemd user watcher units (if created by setup)
-if systemctl --user is-active --quiet emu-stitch-watcher.path 2>/dev/null; then
-    systemctl --user disable --now emu-stitch-watcher.path 2>/dev/null || true
-fi
+# Stop and remove systemd user watcher units (if created by setup). Always
+# disable, not just when active: an enabled-but-stopped unit would otherwise
+# leave a dangling default.target.wants symlink behind.
+systemctl --user disable --now emu-stitch-watcher.path 2>/dev/null || true
 for unit_file in "$HOME/.config/systemd/user/emu-stitch-watcher.path" "$HOME/.config/systemd/user/emu-stitch-watcher.service"; do
     if [ -f "$unit_file" ]; then
         rm -f "$unit_file"
@@ -46,7 +46,15 @@ for unit_file in "$HOME/.config/systemd/user/emu-stitch-watcher.path" "$HOME/.co
 done
 systemctl --user daemon-reload 2>/dev/null || true
 
+# Remove emu-stitch's own settings (backup retention)
+CONFIG_DIR="$HOME/.config/emu-stitch"
+if [ -d "$CONFIG_DIR" ]; then
+    rm -rf "$CONFIG_DIR"
+    echo "  Removed: $CONFIG_DIR"
+fi
+
 echo ""
 echo "=== emu-stitch uninstalled successfully ==="
 echo "Note: Your save profiles in ~/Emulation/saves_by_user/ were not removed."
-echo "Note: Syncthing service configuration was not changed."
+echo "Note: Save backups (*.bak-*) next to your save folders were not removed."
+echo "Note: Syncthing was not changed. Remove 'emustitch-*' folders or paired devices in its web UI if you no longer want them."

@@ -9,3 +9,5 @@ switcher.log
 emu_stitch.log
 docs/superpowers/
 .venv/
+.claude/settings.local.json
+.pytest_cache/

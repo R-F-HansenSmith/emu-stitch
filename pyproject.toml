@@ -4,16 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "emu-stitch"
-version = "1.0.0"
+version = "1.1.0"
 description = "Open-Source Multi-User Emulator Save Synchronizer & Profile Switcher for Handheld Consoles"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "R. F. Hansen-Smith", email = "opensource@emu-stitch.org" }
+    { name = "R. F. Hansen-Smith", email = "3786370+R-F-HansenSmith@users.noreply.github.com" }
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Environment :: Console",
+    "Topic :: Games/Entertainment",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
 ]
@@ -23,6 +26,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/R-F-HansenSmith/emu-stitch"
+Issues = "https://github.com/R-F-HansenSmith/emu-stitch/issues"
+Changelog = "https://github.com/R-F-HansenSmith/emu-stitch/blob/main/CHANGELOG.md"
 
 [project.scripts]
 emu-stitch = "emu_stitch.cli:main"

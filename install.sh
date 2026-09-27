@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 echo "=== Installing emu-stitch CLI ==="
 
@@ -13,7 +13,12 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # --force lets this also work as an upgrade over a previous installation.
 uv tool install --force "$SCRIPT_DIR"
-uv tool update-shell
+
+# Only touch shell startup files if uv's tool bin dir isn't already on PATH.
+if ! command -v emu-stitch >/dev/null 2>&1; then
+    echo "Adding uv's tool directory to PATH in your shell startup file (uv tool update-shell)..."
+    uv tool update-shell
+fi
 
 echo ""
 echo "=== emu-stitch CLI Installed Successfully! ==="

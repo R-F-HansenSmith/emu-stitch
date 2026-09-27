@@ -267,7 +267,7 @@ This rebuilds the active profile's index from its own save folders (each folder'
 - If a second machine already has its own Ryujinx saves when you first set it up, those saves are numbered from `0001` like the first machine's. Where the numbers overlap, the first machine's saves win and the second machine's are kept in a backup (`bis/user/save.bak-*`, never pruned automatically) with a warning. Nothing is lost, but those saves have to be moved in by hand.
 - Playing the *same* save on two machines while they aren't syncing produces Syncthing conflicts, as it does for every emulator.
 
-> **Status: new.** The index format, the merge and the rebuild are covered by tests, including a byte-for-byte round trip of a real Ryujinx index. Before relying on it, back up `~/Emulation/saves_by_user/`, start a new game after your first `switch`, and check its save folder is numbered from this machine's range (the number `switch` prints).
+> **New in 1.1.0.** Tested across two machines with real Ryujinx saves, and covered by tests including a byte-for-byte round trip of a real Ryujinx index. As always, [back up your saves](#installation) first.
 
 Cemu saves are stored by title ID and don't need any of this.
 

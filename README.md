@@ -318,6 +318,12 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 ---
 
+## AI Disclosure
+
+emu-stitch was built with the help of AI (Anthropic's Claude), which wrote a substantial part of the code, tests and documentation. The project is designed, directed and tested on real hardware by R. F. Hansen-Smith, a software engineer with 10 years of experience.
+
+---
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.

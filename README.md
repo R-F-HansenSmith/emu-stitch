@@ -1,20 +1,22 @@
 # 🧵 emu-stitch
 
-> **Open-source multi-user emulator save synchronizer & profile switcher for Linux handheld consoles**
+> **Open-source multi-user emulator save synchronizer & profile switcher for Linux gaming PCs and handhelds**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.linux.org/)
 
-Built for Steam Deck · ROG Ally · Legion Go · CachyOS · Bazzite · ChimeraOS
+Works on any Linux machine with Steam: Steam Deck · ROG Ally · Legion Go · desktops · CachyOS · Bazzite · ChimeraOS
 
 ---
 
 ## What is emu-stitch?
 
-If multiple people share a gaming handheld, their emulator save files will overwrite each other. emu-stitch fixes this by detecting which Steam user is active and atomically routing all emulator save directories to that user's isolated profile — no configuration needed after the first run.
+If several people share a Linux gaming machine (a handheld, a living-room PC, a family desktop), their emulator saves overwrite each other. emu-stitch fixes this by detecting which Steam account is active and routing every emulator's save folders to that person's own profile, switching atomically whenever the Steam account changes. After the first run, no configuration is needed.
 
-It also keeps saves synced across multiple machines via [Syncthing](https://syncthing.net/), so your progress follows you from your Steam Deck to your desktop and back.
+It also keeps saves synced across machines via [Syncthing](https://syncthing.net/), so your progress follows you from your handheld to your desktop and back. That's useful even if you're the only player.
+
+emu-stitch works alongside [EmuDeck](https://www.emudeck.com/) and uses its `~/Emulation` folder layout, but EmuDeck isn't required: without it, emu-stitch simply creates `~/Emulation/saves_by_user/` (or uses any folder you point it at with `--dir`).
 
 **Key guarantees:**
 - Active save data is never deleted. Real directories are merged into the profile and then renamed to a timestamped backup before being replaced with symlinks. Old backups are pruned on a rolling basis (configurable, default: keep the last 3; set to 0 to keep every backup forever), but a backup is only ever pruned if every file in it is also in the profile, byte for byte.
@@ -53,6 +55,8 @@ Once configured, emu-stitch's profile switch covers RetroArch automatically beca
 - Linux (Steam Deck / SteamOS, Arch, Bazzite, CachyOS, ChimeraOS, or any distro)
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) (manages the Python environment and dependencies)
 - Steam installed (for user detection; native, `~/.steam`, and Flatpak installs are all detected)
+- Ryujinx and/or Cemu, installed any way you like (native, AppImage, Flatpak or via EmuDeck)
+- EmuDeck is optional
 - [Syncthing](https://syncthing.net/) 1.12 or newer (optional — only needed for cross-machine sync)
 
 ---
@@ -152,7 +156,7 @@ emu-stitch --debug audit      # Verbose logging and full tracebacks
 ```
   _____ emu-stitch ______
 
-1. EmuDeck Directory ───────────────────────────
+1. Emulation Directory ───────────────────────────
    /home/user/Emulation
    ✔ Internal Storage (/home) - exec permissions active
 

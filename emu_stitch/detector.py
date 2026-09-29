@@ -1,6 +1,6 @@
 """
-Detector module for emu-stitch: Dynamically scans common handheld locations
-for the Emulation directory and detects active Steam AccountName/PersonaName.
+Detector module for emu-stitch: Dynamically scans common internal and external
+(SD card, extra drive) locations for the Emulation directory and detects active Steam AccountName/PersonaName.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def _has_emulation_signatures(path: str) -> bool:
 
 def detect_emulation_dir() -> str:
     """
-    Scans common internal and external handheld paths for the Emulation directory.
+    Scans common internal and external (SD card, extra drive) paths for the Emulation directory.
     Prioritizes active Emulation directories (containing saves/roms/etc.).
     """
     env_dir = os.environ.get("EMU_DIR") or os.environ.get("EMUDECK_DIR")

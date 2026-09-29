@@ -359,10 +359,10 @@ def cmd_audit(args):
     emu_dir = args.dir or detect_emulation_dir()
     active_link = os.path.join(emu_dir, "saves")
     print_banner()
-    cprint("[bold]Auditing EmuDeck & System Environment...[/]")
+    cprint("[bold]Auditing Emulation Directory & System Environment...[/]")
 
-    # 1. EmuDeck Directory
-    print_section_header(1, "EmuDeck Directory")
+    # 1. Emulation Directory
+    print_section_header(1, "Emulation Directory")
     cprint(f"   {esc(emu_dir)}")
     is_noexec, mount_pt, msg = audit_mount_permissions(emu_dir)
     if is_noexec:
@@ -556,7 +556,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="emu-stitch: Open-Source Multi-User Emulator Save Synchronizer"
     )
-    parser.add_argument("--dir", help="Custom EmuDeck directory path")
+    parser.add_argument("--dir", help="Emulation directory to use (default: ~/Emulation, EmuDeck's layout)")
     parser.add_argument("--version", action="version", version=f"emu-stitch {__version__}")
     parser.add_argument("--debug", action="store_true", help="Verbose logging and full tracebacks on errors")
 

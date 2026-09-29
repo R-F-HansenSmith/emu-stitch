@@ -1,5 +1,5 @@
 """
-emu-stitch: Open-Source Multi-User Emulator Save Synchronizer & Profile Switcher for Handheld Consoles.
+emu-stitch: Open-Source Multi-User Emulator Save Synchronizer & Profile Switcher for Linux Gaming PCs and Handhelds.
 """
 
 __version__ = "1.1.0"

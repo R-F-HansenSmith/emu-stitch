@@ -45,12 +45,12 @@ def test_safe_replace_prunes_old_backups_beyond_configured_retention(tmp_path, m
     config_mod.set_backup_retention(1)
 
     link_path = tmp_path / "bis_user_save"
+    target_dir = tmp_path / "profile" / "ryujinx" / "saves"
     (tmp_path / "bis_user_save.bak-20260101-000000").mkdir()
-    (tmp_path / "bis_user_save.bak-20260101-000000" / ".emu-stitch-merged").touch()
+    (tmp_path / "bis_user_save.bak-20260101-000000" / ".emu-stitch-merged").write_text(str(target_dir) + "\n")
     link_path.mkdir()
     (link_path / "File1.bin").write_bytes(b"precious save data")
 
-    target_dir = tmp_path / "profile" / "ryujinx" / "saves"
     _safe_replace_with_symlink(str(link_path), str(target_dir))
 
     backups = sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("bis_user_save.bak-"))
@@ -392,3 +392,37 @@ def test_audit_counts_saves_numbered_in_a_machine_range(tmp_path):
 
     assert ryu[0]["count"] == 2
     assert "across 3 save record(s)" in ryu[0]["details"]
+
+
+class TestCemuWhileRunning:
+    def _cemu(self, tmp_path, monkeypatch, running):
+        save = tmp_path / "Cemu" / "mlc01" / "usr" / "save"
+        save.mkdir(parents=True)
+        (save / "open.sav").write_bytes(b"being written")
+        monkeypatch.setattr(emulators_mod, "ryujinx_config_dirs", lambda: [])
+        monkeypatch.setattr(emulators_mod, "cemu_save_paths", lambda emu_dir=None: [str(save)])
+        monkeypatch.setattr(emulators_mod, "cemu_running", lambda: running)
+        emu_dir = tmp_path / "Emulation"
+        profile = emu_dir / "saves_by_user" / "alice"
+        profile.mkdir(parents=True)
+        os.symlink(str(profile), str(emu_dir / "saves"))
+        return save, emu_dir
+
+    def test_cemu_saves_are_not_touched_while_it_runs(self, tmp_path, monkeypatch):
+        save, emu_dir = self._cemu(tmp_path, monkeypatch, running=True)
+
+        messages = emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "alice")
+
+        assert any("Cemu is running" in m for m in messages)
+        assert not save.is_symlink()
+        assert (save / "open.sav").read_bytes() == b"being written"
+        assert not any(p.name.startswith("save.bak-") for p in save.parent.iterdir())
+
+    def test_cemu_saves_are_routed_once_it_has_closed(self, tmp_path, monkeypatch):
+        save, emu_dir = self._cemu(tmp_path, monkeypatch, running=False)
+
+        messages = emulators_mod.configure_all_emulators(str(emu_dir), str(emu_dir / "saves"), "alice")
+
+        assert not any("Cemu is running" in m for m in messages)
+        assert save.is_symlink()
+        assert (emu_dir / "saves_by_user" / "alice" / "Cemu" / "saves" / "open.sav").read_bytes() == b"being written"

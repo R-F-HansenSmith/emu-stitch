@@ -5,16 +5,25 @@ import os
 import pytest
 
 import emu_stitch.backups as backups_mod
-from emu_stitch.backups import MERGED_MARKER, merge_tree, migrate_to_backup, prune_old_backups
+from emu_stitch.backups import MERGED_MARKER, count_missing, merge_tree, migrate_to_backup, prune_old_backups
 
 
 def _make_backup_dir(base_dir, name, suffix, marker_content="data", merged=True):
+    """A backup plus, if `merged`, the profile it was merged into (kept
+    outside `base_dir` so it doesn't show up in directory listings)."""
     backup_dir = base_dir / f"{name}.bak-{suffix}"
     backup_dir.mkdir()
     (backup_dir / "marker.txt").write_text(marker_content)
     if merged:
-        (backup_dir / MERGED_MARKER).touch()
+        profile = base_dir.parent / f"{base_dir.name}-profile-{name}-{suffix}"
+        profile.mkdir()
+        (profile / "marker.txt").write_text(marker_content)
+        (backup_dir / MERGED_MARKER).write_text(str(profile) + "\n")
     return backup_dir
+
+
+def _profile_of(backup_dir):
+    return backup_dir.parent.parent / (backup_dir.parent.name + "-profile-" + backup_dir.name.replace(".bak-", "-"))
 
 
 def test_keeps_only_the_n_most_recent_backups(tmp_path):
@@ -56,6 +65,41 @@ def test_never_prunes_backups_that_are_not_marked_as_merged(tmp_path):
 
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["saves.bak-20260101-000000", "saves.bak-20260103-000000"]
+
+
+def test_keeps_marked_backup_whose_profile_copy_has_changed(tmp_path):
+    """The profile copy may have been corrupted (or just updated) since the
+    merge; either way the backup may now hold the only good copy."""
+    old = _make_backup_dir(tmp_path, "saves", "20260101-000000", marker_content="good")
+    _make_backup_dir(tmp_path, "saves", "20260102-000000")
+    (_profile_of(old) / "marker.txt").write_text("corrupted")
+
+    prune_old_backups(str(tmp_path / "saves"), retention=1)
+
+    assert old.exists()
+    assert (old / "marker.txt").read_text() == "good"
+
+
+def test_keeps_marked_backup_whose_profile_copy_is_missing(tmp_path):
+    old = _make_backup_dir(tmp_path, "saves", "20260101-000000")
+    _make_backup_dir(tmp_path, "saves", "20260102-000000")
+    (_profile_of(old) / "marker.txt").unlink()
+
+    prune_old_backups(str(tmp_path / "saves"), retention=1)
+
+    assert old.exists()
+
+
+def test_keeps_backup_with_old_style_empty_marker(tmp_path):
+    """Older markers don't record the profile, so the backup can't be
+    re-checked and is kept."""
+    old = _make_backup_dir(tmp_path, "saves", "20260101-000000")
+    (old / MERGED_MARKER).write_text("")
+    _make_backup_dir(tmp_path, "saves", "20260102-000000")
+
+    prune_old_backups(str(tmp_path / "saves"), retention=1)
+
+    assert old.exists()
 
 
 def test_never_prunes_file_backups(tmp_path):
@@ -135,6 +179,36 @@ class TestMergeTree:
         assert os.readlink(str(dst / "link")) == "/nonexistent/target"
 
 
+class TestCountMissing:
+    def test_extra_destination_files_do_not_count(self, tmp_path):
+        src, dst = tmp_path / "src", tmp_path / "dst"
+        (src / "sub").mkdir(parents=True)
+        (src / "sub" / "a.sav").write_bytes(b"A")
+        (dst / "sub").mkdir(parents=True)
+        (dst / "sub" / "a.sav").write_bytes(b"A")
+        (dst / "sub" / "b.sav").write_bytes(b"B")
+
+        assert count_missing(str(src), str(dst)) == 0
+
+    def test_differing_and_missing_entries_count(self, tmp_path):
+        src, dst = tmp_path / "src", tmp_path / "dst"
+        (src / "gone").mkdir(parents=True)
+        (src / "a.sav").write_bytes(b"A")
+        (src / "b.sav").write_bytes(b"B")
+        dst.mkdir()
+        (dst / "a.sav").write_bytes(b"not A")
+
+        assert count_missing(str(src), str(dst)) == 3
+
+    def test_ignores_the_merged_marker(self, tmp_path):
+        src, dst = tmp_path / "src", tmp_path / "dst"
+        src.mkdir()
+        dst.mkdir()
+        (src / MERGED_MARKER).write_text("/somewhere\n")
+
+        assert count_missing(str(src), str(dst)) == 0
+
+
 class TestMigrateToBackup:
     @pytest.fixture(autouse=True)
     def _retention(self, monkeypatch):
@@ -150,6 +224,36 @@ class TestMigrateToBackup:
         assert not path.exists()
         assert os.path.isfile(os.path.join(backup, MERGED_MARKER))
         assert (tmp_path / "profile" / "a.sav").read_bytes() == b"A"
+
+    def test_marker_records_the_real_profile_not_the_active_symlink(self, tmp_path):
+        alice = tmp_path / "saves_by_user" / "alice"
+        alice.mkdir(parents=True)
+        active = tmp_path / "active"
+        os.symlink(str(alice), str(active))
+        path = tmp_path / "saves"
+        path.mkdir()
+
+        backup = migrate_to_backup(str(path), str(active / "Cemu"))
+
+        recorded = open(os.path.join(backup, MERGED_MARKER)).read().strip()
+        assert recorded == os.path.realpath(str(alice / "Cemu"))
+
+    def test_clean_backup_is_pruned_later_only_while_profile_still_matches(self, tmp_path):
+        profile = tmp_path / "profile"
+        path = tmp_path / "saves"
+        path.mkdir()
+        (path / "a.sav").write_bytes(b"A")
+        first = migrate_to_backup(str(path), str(profile))
+
+        (profile / "a.sav").write_bytes(b"corrupted")
+        path.mkdir()
+        migrate_to_backup(str(path), str(profile))
+        assert os.path.exists(first)
+
+        (profile / "a.sav").write_bytes(b"A")
+        path.mkdir()
+        migrate_to_backup(str(path), str(profile))
+        assert not os.path.exists(first)
 
     def test_conflicting_merge_leaves_backup_unmarked_and_it_survives_pruning(self, tmp_path):
         profile = tmp_path / "profile"

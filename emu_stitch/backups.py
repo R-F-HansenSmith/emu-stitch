@@ -5,9 +5,12 @@ old backups, keeping only the N most recent per path.
 
 A backup is only ever pruned if it carries MERGED_MARKER, which is written
 when every file in it was already present, byte-identical, in the profile it
-was merged into. Backups holding anything that exists nowhere else (e.g. a
-save that conflicted with a different version at the destination) are kept
-forever, regardless of the retention setting.
+was merged into, and records where that profile is. Before pruning, the
+backup is compared with that profile again, byte for byte: if any file has
+since changed or gone missing there (corruption, a bad sync, or simply newer
+progress), the backup is kept. Backups holding anything that exists nowhere
+else (e.g. a save that conflicted with a different version at the
+destination) are kept forever, regardless of the retention setting.
 """
 
 from __future__ import annotations
@@ -54,6 +57,45 @@ def merge_tree(src: str, dst: str) -> int:
     return conflicts
 
 
+def count_missing(src: str, dst: str) -> int:
+    """
+    Count entries in `src` that aren't also in `dst`, byte for byte, using
+    the same rules as merge_tree (symlinks compared by target). Entries only
+    in `dst` don't count. The merged marker itself is ignored.
+    """
+    missing = 0
+    for name in os.listdir(src):
+        if name == MERGED_MARKER:
+            continue
+        s = os.path.join(src, name)
+        d = os.path.join(dst, name)
+        if os.path.islink(s):
+            if not (os.path.islink(d) and os.readlink(d) == os.readlink(s)):
+                missing += 1
+        elif os.path.isdir(s):
+            if os.path.isdir(d):
+                missing += count_missing(s, d)
+            else:
+                missing += 1
+        elif not (os.path.isfile(d) and filecmp.cmp(s, d, shallow=False)):
+            missing += 1
+    return missing
+
+
+def _still_fully_merged(backup_path: str) -> bool:
+    """Whether a marked backup is still fully contained in the profile its
+    marker points at. Older markers are empty (no recorded profile), so
+    those backups can't be checked and are kept."""
+    try:
+        with open(os.path.join(backup_path, MERGED_MARKER), encoding="utf-8") as f:
+            target = f.read().strip()
+        if not target or not os.path.isdir(target):
+            return False
+        return count_missing(backup_path, target) == 0
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def migrate_to_backup(path: str, target_dir: str) -> str:
     """
     Replace-in-waiting for a real file/directory at `path`: merge its
@@ -78,7 +120,10 @@ def migrate_to_backup(path: str, target_dir: str) -> str:
     os.rename(path, backup_path)
 
     if conflicts == 0:
-        open(os.path.join(backup_path, MERGED_MARKER), "w").close()
+        # Record the real profile directory (not the ~/Emulation/saves
+        # symlink, which moves on every switch) so pruning can re-check it.
+        with open(os.path.join(backup_path, MERGED_MARKER), "w", encoding="utf-8") as f:
+            f.write(os.path.realpath(target_dir) + "\n")
     else:
         logging.warning(
             f"{conflicts} item(s) in {path} differed from the copy already in "
@@ -93,8 +138,9 @@ def migrate_to_backup(path: str, target_dir: str) -> str:
 def prune_old_backups(link_path: str, retention: int) -> None:
     """
     Keep only the `retention` most recent `<link_path>.bak-*` backups next
-    to `link_path`, deleting older ones that are marked as fully merged.
-    Unmarked backups are always kept. `retention <= 0` disables pruning
+    to `link_path`, deleting older ones that are marked as fully merged and
+    are still, byte for byte, contained in the profile they were merged
+    into. Anything else is always kept. `retention <= 0` disables pruning
     (keep every backup forever).
     """
     if retention <= 0:
@@ -113,6 +159,9 @@ def prune_old_backups(link_path: str, retention: int) -> None:
         full_path = os.path.join(parent, name)
         if os.path.islink(full_path) or not os.path.isfile(os.path.join(full_path, MERGED_MARKER)):
             logging.debug(f"Keeping unmerged backup {full_path}")
+            continue
+        if not _still_fully_merged(full_path):
+            logging.debug(f"Keeping backup {full_path}: its profile copy has changed or can't be checked")
             continue
         try:
             shutil.rmtree(full_path)

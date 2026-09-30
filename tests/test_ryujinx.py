@@ -434,6 +434,16 @@ def test_ryujinx_running_detection(tmp_path, monkeypatch, comm, argv0, expected)
     assert ryu_mod.ryujinx_running() is expected
 
 
+@pytest.mark.parametrize("comm,argv0,expected", [
+    ("Cemu", "/usr/bin/Cemu", True),
+    ("AppRun", "/tmp/.mount_x/Cemu.AppImage", True),
+    ("Ryujinx", "/opt/Ryujinx/Ryujinx", False),
+])
+def test_process_running_detects_cemu(tmp_path, monkeypatch, comm, argv0, expected):
+    monkeypatch.setattr(ryu_mod, "PROC_DIR", _fake_proc(tmp_path, {4242: (comm, argv0)}))
+    assert ryu_mod.process_running("cemu") is expected
+
+
 def test_unused_duplicate_is_reported_separately_not_as_orphan(tmp_path):
     ryu, profile = tmp_path / "Ryujinx", tmp_path / "alice"
     write_index(ryu, [(key(GAME_B), 2)], last_published=3)

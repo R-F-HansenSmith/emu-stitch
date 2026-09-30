@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Data safety
+- Backups are compared with their profile again, byte for byte, right before they're pruned. Previously the check only happened when the backup was made, so if the profile's copy was later corrupted (or changed), a backup marked safe could still be pruned. A backup is now only pruned if every file in it is still identical in the profile. Backups marked by older versions don't record their profile and are kept.
+- `switch` no longer relinks or migrates Cemu's save folder while Cemu is running, so a save that's open or mid-write is never moved or merged. (Ryujinx already had this check.)
+
 ## 1.1.0
 
 ### Security

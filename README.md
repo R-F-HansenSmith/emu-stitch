@@ -19,7 +19,7 @@ It also keeps saves synced across machines via [Syncthing](https://syncthing.net
 emu-stitch works alongside [EmuDeck](https://www.emudeck.com/) and uses its `~/Emulation` folder layout, but EmuDeck isn't required: without it, emu-stitch simply creates `~/Emulation/saves_by_user/` (or uses any folder you point it at with `--dir`).
 
 **Key guarantees:**
-- Active save data is never deleted. Real directories are merged into the profile and then renamed to a timestamped backup before being replaced with symlinks. Old backups are pruned on a rolling basis (configurable, default: keep the last 3; set to 0 to keep every backup forever), but a backup is only ever pruned if every file in it is also in the profile, byte for byte.
+- Active save data is never deleted. Real directories are merged into the profile and then renamed to a timestamped backup before being replaced with symlinks. Old backups are pruned on a rolling basis (configurable, default: keep the last 3; set to 0 to keep every backup forever), but a backup is only ever pruned if every file in it is also in the profile, byte for byte, both when it's made and again right before it's pruned.
 - Switching profiles is atomic: `~/Emulation/saves` is repointed with a single `rename()`, so it never goes missing. (The one-time migration of an emulator's own save folder into a profile is not atomic, but it never deletes anything; see [Data safety](#data-safety).)
 - Installed and run via [uv](https://docs.astral.sh/uv/) — dependencies are isolated in their own environment, no manual `pip install` or virtualenv management needed.
 
@@ -30,8 +30,10 @@ emu-stitch works alongside [EmuDeck](https://www.emudeck.com/) and uses its `~/E
 | Emulator | Profile Switching | Save Detection | Notes |
 |---|---|---|---|
 | Ryujinx (Nintendo Switch) | Automatic | Yes | Routes `bis/user/save`, `saveMeta` and the save index. Native and Flatpak. See [Ryujinx save index](#ryujinx-save-index) |
-| Cemu (Wii U) | Automatic | Yes | Routes `mlc01/usr/save`. Native and Flatpak |
+| Cemu (Wii U) | Automatic | Yes | Routes `mlc01/usr/save`. Native and Flatpak. Not switched while Cemu is running |
 | RetroArch / Standalone | Manual setup | Yes | See [RetroArch setup](#retroarch--standalone-emulators) |
+
+**Running emulators are left alone.** If Ryujinx or Cemu is running when you switch, `switch` doesn't touch that emulator's saves (an open save could be mid-write) and tells you to close it and run `emu-stitch switch` again. The watcher and autostart entry run `switch` for you the next time the account changes or you log in.
 
 **Flatpak emulators** are routed inside their sandbox (`~/.var/app/<app-id>/…`). The sandbox must be able to read your Emulation folder; if it lives outside your home directory (e.g. on an SD card), grant access with Flatseal or `flatpak override --user --filesystem=/run/media <app-id>`.
 
@@ -241,9 +243,9 @@ loginusers.vdf parsed → active user: alice
 When emu-stitch needs to replace a real directory with a symlink (first run or emulator config migration), it:
 1. Merges the contents into the new profile directory (destination files win — existing saves are never overwritten)
 2. Renames the original to `<path>.bak-YYYYMMDD-HHMMSS`
-3. If every file in it was already in the profile, byte for byte, marks the backup as safe to prune. If anything differed, the backup holds the only copy of that version, so it's left unmarked, a warning is printed, and it's **never pruned automatically**.
+3. If every file in it was already in the profile, byte for byte, marks the backup as safe to prune and records which profile folder it was merged into. If anything differed, the backup holds the only copy of that version, so it's left unmarked, a warning is printed, and it's **never pruned automatically**.
 
-Backups are kept on a rolling basis: only the N most recent `.bak-*` folders per path are retained, and older ones that are safe to prune are removed automatically. You're asked to set N (default 3) the first time you run `emu-stitch setup`; enter `0` to keep every backup forever. Change it later by editing `backup_retention` in `~/.config/emu-stitch/config.json`.
+Backups are kept on a rolling basis: only the N most recent `.bak-*` folders per path are retained, and older ones that are safe to prune are removed automatically. Right before pruning, emu-stitch compares the backup with its profile folder again, byte for byte. If any file in the backup has since changed or gone missing in the profile (corruption, a bad sync, or simply newer progress; emu-stitch can't tell these apart), the backup is kept. Backups marked by versions before this check don't record their profile, so they're kept too. You're asked to set N (default 3) the first time you run `emu-stitch setup`; enter `0` to keep every backup forever. Change it later by editing `backup_retention` in `~/.config/emu-stitch/config.json`.
 
 Profile names come from your Steam account name. If two Steam accounts would end up with the same folder name (including names that differ only by case), the second one gets its Steam ID appended, so two people never share a profile by accident.
 

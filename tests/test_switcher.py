@@ -113,10 +113,11 @@ def test_run_switch_prunes_old_backups_beyond_configured_retention(tmp_path, fak
 
     emu_dir = tmp_path / "Emulation"
     emu_dir.mkdir()
-    # Two pre-existing backups from earlier migrations.
+    # Two pre-existing backups from earlier migrations into TestUser's profile.
+    profile = emu_dir / "saves_by_user" / "TestUser"
     for name in ("saves.bak-20260101-000000", "saves.bak-20260102-000000"):
         (emu_dir / name).mkdir()
-        (emu_dir / name / ".emu-stitch-merged").touch()
+        (emu_dir / name / ".emu-stitch-merged").write_text(str(profile) + "\n")
     saves_dir = emu_dir / "saves"
     saves_dir.mkdir()
     (saves_dir / "existing.srm").write_text("data")

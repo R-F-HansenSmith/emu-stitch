@@ -563,10 +563,10 @@ def _prune_index_backups(base: str) -> None:
 # Process detection
 # ---------------------------------------------------------------------------
 
-def ryujinx_running() -> bool:
-    """Whether a Ryujinx process is running. Ryujinx keeps its save index in
-    memory and writes it back on exit, so emu-stitch must not relink its
-    saves or touch the index while it runs."""
+def process_running(name: str) -> bool:
+    """Whether a process whose name (or argv[0], for AppImages) starts with
+    `name` is running, case-insensitively."""
+    name = name.lower()
     own_pid = str(os.getpid())
     try:
         pids = [p for p in os.listdir(PROC_DIR) if p.isdigit() and p != own_pid]
@@ -580,6 +580,13 @@ def ryujinx_running() -> bool:
                 argv0 = f.read().split(b"\x00", 1)[0].decode("utf-8", "replace")
         except OSError:
             continue
-        if comm.startswith("ryujinx") or os.path.basename(argv0).lower().startswith("ryujinx"):
+        if comm.startswith(name) or os.path.basename(argv0).lower().startswith(name):
             return True
     return False
+
+
+def ryujinx_running() -> bool:
+    """Whether a Ryujinx process is running. Ryujinx keeps its save index in
+    memory and writes it back on exit, so emu-stitch must not relink its
+    saves or touch the index while it runs."""
+    return process_running("ryujinx")

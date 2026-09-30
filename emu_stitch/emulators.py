@@ -17,6 +17,7 @@ from .ryujinx import (
     PROFILE_INDEX,
     index_present,
     maintain_profile_index,
+    process_running,
     ryujinx_running,
     scan_profile_saves,
 )
@@ -150,6 +151,12 @@ def route_ryujinx_index(ryujinx_dir: str, active_link: str) -> None:
     _safe_replace_with_symlink(link_path, target)
 
 
+def cemu_running() -> bool:
+    """Whether Cemu is running. It may have a save open, so its save folder
+    mustn't be relinked (or migrated) under it."""
+    return process_running("cemu")
+
+
 def configure_cemu_symlinks(emu_dir: str, active_link: str) -> None:
     """Ensure Cemu mlc01/usr/save symlinks are correctly routed."""
     expected_cemu_target = os.path.join(active_link, "Cemu/saves")
@@ -254,5 +261,10 @@ def configure_all_emulators(emu_dir: str, active_link: str, profile_name: str) -
             configure_ryujinx_symlinks(active_link, ryujinx_dir)
             messages += maintain_profile_index(ryujinx_dir, os.path.realpath(active_link), backup_root)
 
-    configure_cemu_symlinks(emu_dir, active_link)
+    if cemu_save_paths(emu_dir) and cemu_running():
+        messages.append(
+            "Cemu is running, so its saves were not switched. Close Cemu, then run 'emu-stitch switch'."
+        )
+    else:
+        configure_cemu_symlinks(emu_dir, active_link)
     return messages
